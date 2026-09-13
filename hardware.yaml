@@ -1,0 +1,84 @@
+# Shared hardware definition for the Seeed SenseCAP Indicator D1/D1L (ESP32-S3 side).
+
+esp32:
+  variant: esp32s3
+  flash_size: 8MB
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      CONFIG_ESPTOOLPY_FLASHSIZE_8MB: y
+      CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240: y
+      CONFIG_ESP32S3_DATA_CACHE_64KB: y
+      CONFIG_SPIRAM_FETCH_INSTRUCTIONS: y
+      CONFIG_SPIRAM_RODATA: y
+      # Let malloc/new fall back to PSRAM when internal RAM is short (blocks over 4 KB go to PSRAM
+      # first) and move the Wi-Fi/lwIP pools there too. Without this, a std::string growing inside
+      # the HTTP fetch task could hit an exhausted internal heap and abort the whole board.
+      CONFIG_SPIRAM_USE_MALLOC: y
+      CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL: "4096"
+      CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL: "49152"
+      CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP: y
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+output:
+  - platform: ledc
+    pin:
+      number: GPIO45
+      ignore_strapping_warning: true
+    id: ledc_gpio45
+    frequency: 100Hz
+
+light:
+  - platform: monochromatic
+    id: backlight
+    name: "Backlight"
+    output: ledc_gpio45
+    restore_mode: ALWAYS_ON
+
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: GPIO38
+      inverted: true
+    id: user_button
+    on_click:
+      - min_length: 30ms
+        max_length: 600ms
+        then:
+          - script.execute: {id: ev, msg: "BUTTON"}
+      - min_length: 700ms
+        max_length: 6s
+        then:
+          - script.execute: {id: ev, msg: "BUTTONLONG"}
+
+i2c:
+  - id: bus_a
+    sda: GPIO39
+    scl: GPIO40
+    scan: false
+
+spi:
+  - id: lcd_spi
+    clk_pin: GPIO41
+    mosi_pin: GPIO48
+    miso_pin: GPIO47
+
+pca9554:
+  - id: pca9554a_device
+    address: 0x20
+    pin_count: 16
+
+display:
+  - platform: mipi_rgb
+    model: SEEED-INDICATOR-D1
+    id: sensecap_display
+
+touchscreen:
+  platform: ft5x06
+  id: sensecap_touchscreen
+  transform:
+    mirror_x: true
+    mirror_y: true
