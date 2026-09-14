@@ -545,8 +545,12 @@ script:
             return;
           }
 
-          // JOB_SCREEN
-          id(next_poll_at) = millis() + 60000;
+          // JOB_SCREEN. The backend says how soon to poll again (Poll-After, 15 to 1800 s,
+          // captured by the fetcher); 60 s when the header is absent. Set before the 304
+          // return so an unchanged document still picks up a cadence change.
+          uint32_t next = r.poll_after ? r.poll_after : 60;
+          if (r.poll_after) ESP_LOGD("hb", "poll-after %u s", (unsigned) r.poll_after);
+          id(next_poll_at) = millis() + next * 1000UL;
           if (r.status == 304) return;   // unchanged: keep showing the last document
           if (r.status != 200) {
             hb::g_host.set_status("HTTP " + std::to_string(r.status) + " at " + nowstr);
@@ -580,7 +584,7 @@ script:
 
 interval:
   # Backend scheduler. next_poll_at carries the whole cadence: 10 s while unclaimed (or whatever
-  # /v1/device/config asks for), 60 s for the screen document, immediately after a settings change
+  # /v1/device/config asks for), the Poll-After header on the screen response (60 s when absent), immediately after a settings change
   # or a tap-to-refresh, 30 s after a 429, and 30 s doubling to 5 minutes after an outage.
   - interval: 1s
     then:
