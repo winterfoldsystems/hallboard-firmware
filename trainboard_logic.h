@@ -1,5 +1,7 @@
-// Pure logic for the standalone train board: JSON parsing, station search, time helpers.
-// Mirrors trainboard.py. Included by trainboard_wifi.yaml; glue to LVGL lives in the YAML lambdas.
+// Pure logic for the HallBoard display: screen-document parsing, station search, Wi-Fi scanning
+// and the background HTTP task. The device talks to one host (the HallBoard backend) and renders
+// the document it serves; it never parses a data provider's schema. Glue to LVGL lives in the
+// YAML lambdas in hallboard.yaml.
 #pragma once
 #include <string>
 #include <vector>
@@ -9,10 +11,13 @@
 #include <ctime>
 #include <algorithm>
 #include "esphome/components/json/json_util.h"
+#include "esphome/core/helpers.h"
 #include "esphome/core/log.h"
 #include "stations.h"
 #ifdef USE_WIFI
+#include <strings.h>
 #include <esp_wifi.h>
+#include <esp_random.h>
 #include <esp_http_client.h>
 #include <esp_crt_bundle.h>
 #include <freertos/FreeRTOS.h>
@@ -23,25 +28,26 @@
 
 namespace tb {
 
-struct Row { std::string time, dest, plat, status, colour, uid, expected;
-             std::string orig_sched;   // arrivals boards: booked departure from the origin (HH:MM)
-             time_t orig_sched_epoch = 0; };
-struct Board { std::string header; std::vector<Row> rows; bool degraded = false; };
+// One row of a board page. `uid` is the document's service id, echoed back to
+// GET /v1/device/service/<id> on a long press.
+struct Row { std::string time, dest, plat, status, colour, uid, expected; };
+// One board page. `asof` is the provider timestamp the backend built it from (unix seconds) and
+// `stale` is set when the backend is serving its last good payload past the module's limit.
+struct Board { std::string header; std::vector<Row> rows; uint32_t asof = 0; bool stale = false; };
 
-// Last fetched board per selection and when it was fetched (kept here so lambdas can use them
-// without ESPHome globals, which are declared before this header is included).
+// The two board pages of the last document (kept here so lambdas can use them without ESPHome
+// globals, which are declared before this header is included).
 inline Board g_cache[2];
-inline std::string g_stamp[2];
-// Arrivals boards: actual departure time from the origin, looked up per train (one /service call,
-// cached for the day) once the booked departure has passed. checked = millis() of the last lookup.
-#include <map>
-inline std::map<std::string, std::string> g_origin_actual;
-inline std::map<std::string, uint32_t> g_origin_checked;
 
-// Shared calendar (from the calendar-proxy worker): one item per event occurrence, sorted.
+// The agenda page of the last document: one item per event occurrence, already sorted.
 struct CalItem { std::string d, w, t, u, s, l; bool all_day = false; };
 inline std::vector<CalItem> g_cal;
 inline std::string g_cal_name;
+inline uint32_t g_cal_asof = 0;
+inline bool g_cal_stale = false;
+
+// Firmware version, sent as X-Firmware on every request. Set from the YAML substitution on boot.
+inline std::string g_fw;
 
 // ---------------------------------------------------------------- CRS codes packed into int (restorable globals)
 inline int pack_code(const std::string &c) {
@@ -117,311 +123,183 @@ inline std::string shorten(std::string name, size_t limit) {
   return name;
 }
 
-// ---------------------------------------------------------------- ISO 8601 helpers
-inline long days_from_civil(int y, int m, int d) {
-  y -= m <= 2;
-  const long era = (y >= 0 ? y : y - 399) / 400;
-  const unsigned yoe = (unsigned) (y - era * 400);
-  const unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
-  const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-  return era * 146097 + (long) doe - 719468;
-}
-
-// Epoch seconds for an ISO datetime. Naive strings (no zone, which is what RTT sends: local UK
-// time) are treated as UTC unless naive_is_local is set, in which case the device TZ applies.
-// now_utc must then be the current epoch from ESPHome's time component: the C library clock
-// (time()) is never set on this build, but localtime_r() does honour the configured TZ.
-inline time_t iso_epoch(const char *s, bool *has_offset = nullptr, bool naive_is_local = false, time_t now_utc = 0) {
-  int Y = 0, M = 0, D = 0, h = 0, m = 0, sec = 0;
-  if (!s || sscanf(s, "%d-%d-%dT%d:%d:%d", &Y, &M, &D, &h, &m, &sec) < 5) return 0;
-  const char *z = strlen(s) > 16 ? strpbrk(s + 16, "Z+-") : nullptr;
-  if (has_offset) *has_offset = z != nullptr;
-  if (!z && naive_is_local) {
-    // mktime() ignores the TZ here, but localtime_r() honours it, so take the current UTC offset
-    // from the difference between local and UTC wall clocks (DST edge minutes are negligible).
-    struct tm lt, gt;
-    localtime_r(&now_utc, &lt);
-    gmtime_r(&now_utc, &gt);
-    long off = (lt.tm_hour - gt.tm_hour) * 3600L + (lt.tm_min - gt.tm_min) * 60L;
-    if (off > 12 * 3600L) off -= 86400L;
-    if (off < -12 * 3600L) off += 86400L;
-    return (time_t) (days_from_civil(Y, M, D) * 86400L + h * 3600L + m * 60 + sec - off);
+// ---------------------------------------------------------------- device identity
+// The device secret is 64 lowercase hex characters held in a restored char[65] global. It is
+// generated here on first boot and is never logged, displayed or sent anywhere but the backend.
+inline bool secret_valid(const char *s) {
+  if (!s) return false;
+  for (int i = 0; i < 64; i++) {
+    char c = s[i];
+    if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
   }
-  long off = 0;
-  if (z && *z != 'Z') { int oh = 0, om = 0; sscanf(z + 1, "%d:%d", &oh, &om); off = (oh * 3600L + om * 60) * (*z == '-' ? -1 : 1); }
-  return (time_t) (days_from_civil(Y, M, D) * 86400L + h * 3600L + m * 60 + sec - off);
+  return s[64] == 0;
 }
 
-// Local HH:MM for an ISO datetime (uses the TZ set by the time component).
-inline std::string iso_hhmm(const char *s) {
-  if (!s || strlen(s) < 16) return "";
-  bool has_off = false;
-  time_t e = iso_epoch(s, &has_off);
-  if (!has_off) return std::string(s + 11, 5);
-  struct tm lt;
-  localtime_r(&e, &lt);
-  char b[8];
-  strftime(b, sizeof b, "%H:%M", &lt);
+#ifdef USE_WIFI
+inline void fill_secret(char *out /* at least 65 bytes */) {
+  uint8_t raw[32];
+  esp_fill_random(raw, sizeof raw);
+  static const char *HEX = "0123456789abcdef";
+  for (int i = 0; i < 32; i++) {
+    out[i * 2] = HEX[(raw[i] >> 4) & 0xF];
+    out[i * 2 + 1] = HEX[raw[i] & 0xF];
+  }
+  out[64] = 0;
+}
+
+// Lowercase colon-separated MAC, sent to pair/begin as a human-readable label only.
+inline std::string mac_lower() {
+  uint8_t m[6] = {};
+  esphome::get_mac_address_raw(m);
+  char b[18];
+  snprintf(b, sizeof b, "%02x:%02x:%02x:%02x:%02x:%02x", m[0], m[1], m[2], m[3], m[4], m[5]);
   return b;
 }
+#endif
 
-// ---------------------------------------------------------------- parsers
-inline bool parse_token(const std::string &body, std::string &token, std::string &valid_until) {
-  JsonDocument doc = esphome::json::parse_json(body);
-  if (doc.isNull()) return false;
-  const char *t = doc["token"].as<const char *>();
-  if (!t) return false;
-  token = t;
-  const char *v = doc["validUntil"].as<const char *>();
-  valid_until = v ? v : "";
-  return true;
+// ---------------------------------------------------------------- JSON helpers
+// Every string taken out of a document is truncated: the device renders fixed-width labels and a
+// malformed or oversized document must not be able to grow the heap without bound.
+template<typename T> inline std::string jstr(T v, size_t limit) {
+  const char *s = v.template as<const char *>();
+  if (!s) return "";
+  std::string o(s);
+  if (o.size() > limit) o.resize(limit);
+  return o;
 }
+template<typename T> inline uint32_t juint(T v) { return v.template as<uint32_t>(); }
+template<typename T> inline bool jbool(T v) { return v.template as<bool>(); }
 
-inline std::string dest_names(JsonArray dests) {
-  std::string out;
-  for (JsonObject d : dests) {
-    const char *n = d["location"]["description"].as<const char *>();
-    if (!out.empty()) out += " & ";
-    out += n ? n : "?";
-  }
-  return out.empty() ? "?" : out;
-}
+// ---------------------------------------------------------------- screen document (docs/screen-document.md)
+// What the last parse found, so the caller knows which pages the document actually carried.
+struct ScreenInfo { bool board_seen[2] = {false, false}; bool cal_seen = false; int pages = 0; };
 
-inline bool parse_board(const std::string &body, const std::string &from, const std::string &to, Board &out) {
+// Copies the first two "board" pages into g_cache[0]/[1] and the first "agenda" page into g_cal.
+// Other page types and unknown fields are ignored, as the contract requires.
+inline bool parse_screen(const std::string &body, ScreenInfo &info) {
   JsonDocument doc = esphome::json::parse_json(body);
   if (doc.isNull()) return false;
   JsonObject root = doc.as<JsonObject>();
-  const char *ln = root["query"]["location"]["description"].as<const char *>();
-  out.header = shorten(ln ? ln : from, 14);
-  if (!to.empty()) out.header += "  to " + shorten(station_name(to), 14);
-  const char *core = root["systemStatus"]["rttCore"].as<const char *>();
-  const char *nr = root["systemStatus"]["realtimeNetworkRail"].as<const char *>();
-  out.degraded = (core && strcmp(core, "OK")) || (nr && strcmp(nr, "OK"));
+  if (juint(root["v"]) != 1) return false;
+  if (!root["pages"].is<JsonArray>()) return false;
 
-  struct Tmp { std::string key; Row r; };
-  std::vector<Tmp> tmp;
-  for (JsonObject svc : root["services"].as<JsonArray>()) {
-    JsonObject td = svc["temporalData"], dep = td["departure"], sm = svc["scheduleMetadata"], lm = svc["locationMetadata"];
-    const char *display = td["displayAs"].as<const char *>();
-    const char *booked = dep["scheduleAdvertised"].as<const char *>();
-    if (!booked || !display || !strcmp(display, "PASS")) continue;
-    if (sm["inPassengerService"].is<bool>() && !sm["inPassengerService"].as<bool>()) continue;
-    if (dep["realtimeActual"].as<const char *>()) continue;  // already gone
-    Row r;
-    r.time = iso_hhmm(booked);
-    r.dest = shorten(dest_names(svc["destination"].as<JsonArray>()), 17);
-    const char *pa = lm["platform"]["actual"].as<const char *>(), *pp = lm["platform"]["planned"].as<const char *>();
-    r.plat = pa ? pa : (pp ? pp : "-");
-    const char *fc = dep["realtimeForecast"].as<const char *>();
-    if (!fc) fc = dep["realtimeEstimate"].as<const char *>();
-    bool cancelled = (dep["isCancelled"].is<bool>() && dep["isCancelled"].as<bool>()) || !strcmp(display, "CANCELLED") || !strcmp(display, "DIVERTED");
-    // Late only when RTT says so (positive lateness), or, without a lateness figure, when the
-    // forecast is after the booked time. Early running is shown as on time.
-    bool has_late = dep["realtimeAdvertisedLateness"].is<int>();
-    int late = has_late ? dep["realtimeAdvertisedLateness"].as<int>() : 0;
-    bool running_late = fc && (has_late ? late > 0 : iso_hhmm(fc) > r.time);
-    if (cancelled) { r.status = "Cancelled"; r.colour = "R"; }
-    else if (running_late) { r.status = "Delayed"; r.colour = "Y"; r.expected = iso_hhmm(fc); }
-    else if (fc) { r.status = "On time"; r.colour = "G"; }
-    else { r.status = "Scheduled"; r.colour = "W"; }
-    const char *st = td["status"].as<const char *>();
-    if (st && !cancelled && (!strcmp(st, "ARRIVING") || !strcmp(st, "AT_PLATFORM") || !strcmp(st, "DEPART_PREPARING") || !strcmp(st, "DEPART_READY")))
-      r.status = "At platform";
-    const char *mode = sm["modeType"].as<const char *>();
-    if (mode && strstr(mode, "BUS")) { r.status = "Bus • " + r.status; r.plat = "BUS"; }
-    int veh = lm["numberOfVehicles"].is<int>() ? lm["numberOfVehicles"].as<int>() : 0;
-    if (veh == 1) r.status += " • 1 coach";
-    else if (veh > 1) r.status += " • " + std::to_string(veh) + " coaches";
-    if (!to.empty()) {
-      std::string to_name = station_name(to);
-      for (JsonObject d : svc["destination"].as<JsonArray>()) {
-        bool match = false;
-        for (const char *c : d["location"]["shortCodes"].as<JsonArray>()) if (c && to == c) match = true;
-        for (const char *c : d["location"]["longCodes"].as<JsonArray>()) if (c && to == c) match = true;
-        const char *dn = d["location"]["description"].as<const char *>();
-        if (dn && to_name == dn) match = true;
-        if (!match) continue;
-        const char *arr = d["temporalData"]["realtimeForecast"].as<const char *>();
-        if (!arr) arr = d["temporalData"]["scheduleAdvertised"].as<const char *>();
-        if (arr) r.status += " • arr " + iso_hhmm(arr);
+  const size_t MAX_PAGES = 8, MAX_ROWS = 5, MAX_EVENTS = 64;
+  int board = 0;
+  JsonArray pages = root["pages"].as<JsonArray>();
+  for (JsonObject pg : pages) {
+    if ((size_t) info.pages >= MAX_PAGES) break;
+    info.pages++;
+    const char *type = pg["type"].as<const char *>();
+    if (!type) continue;
+    if (!strcmp(type, "board") && board < 2) {
+      Board nb;
+      nb.header = jstr(pg["title"], 40);
+      nb.asof = juint(pg["asof"]);
+      nb.stale = jbool(pg["stale"]);
+      JsonArray rows = pg["rows"].as<JsonArray>();
+      for (JsonObject rw : rows) {
+        if (nb.rows.size() >= MAX_ROWS) break;
+        Row r;
+        r.time = jstr(rw["t"], 8);
+        r.dest = jstr(rw["d"], 32);
+        r.plat = jstr(rw["p"], 4);
+        r.status = jstr(rw["s"], 96);
+        r.colour = jstr(rw["c"], 1);
+        r.expected = jstr(rw["e"], 8);
+        r.uid = jstr(rw["id"], 48);
+        nb.rows.push_back(r);
       }
+      g_cache[board] = nb;
+      info.board_seen[board] = true;
+      board++;
+    } else if (!strcmp(type, "agenda") && !info.cal_seen) {
+      std::vector<CalItem> items;
+      JsonArray events = pg["e"].as<JsonArray>();
+      for (JsonObject e : events) {
+        if (items.size() >= MAX_EVENTS) break;
+        CalItem it;
+        it.d = jstr(e["d"], 8);
+        it.w = jstr(e["w"], 24);
+        if (it.d.empty() || it.w.empty()) continue;
+        it.t = jstr(e["t"], 8);
+        it.u = jstr(e["u"], 10);
+        it.s = jstr(e["s"], 64);
+        it.l = jstr(e["l"], 48);
+        it.all_day = juint(e["a"]) == 1;
+        items.push_back(it);
+      }
+      g_cal = items;
+      g_cal_name = jstr(pg["cal"], 24);
+      if (g_cal_name.empty()) g_cal_name = "Calendar";
+      g_cal_asof = juint(pg["asof"]);
+      g_cal_stale = jbool(pg["stale"]);
+      info.cal_seen = true;
     }
-    const char *hc = sm["trainReportingIdentity"].as<const char *>();
-    if (hc) { r.status += " • "; r.status += hc; }
-    const char *op = sm["operator"]["name"].as<const char *>();
-    if (op) r.status += " • " + shorten(op, 12);
-    const char *uid = sm["uniqueIdentity"].as<const char *>();
-    r.uid = uid ? uid : "";
-    tmp.push_back({booked, r});
   }
-  std::sort(tmp.begin(), tmp.end(), [](const Tmp &a, const Tmp &b) { return a.key < b.key; });
-  for (auto &t : tmp) { if (out.rows.size() >= 5) break; out.rows.push_back(t.r); }
-  if (out.degraded && !out.rows.empty()) out.rows.back().status += "  (RTT data limited)";
+  // Pages the document no longer carries stop being displayed.
+  for (int i = board; i < 2; i++) g_cache[i] = Board();
+  if (!info.cal_seen) { g_cal.clear(); g_cal_name.clear(); g_cal_asof = 0; g_cal_stale = false; }
   return true;
 }
 
-// Arrivals at `at`, optionally only trains that called at `from` earlier. Row: booked arrival, origin
-// name, platform; status carries the booked departure from the origin (the actual one is filled in
-// at render time from g_origin_actual).
-inline bool parse_arrivals(const std::string &body, const std::string &at, const std::string &from, Board &out, time_t now_utc) {
+// POST /v1/pair/begin: {claimed:true} or {claimed:false, code, expires_in, poll}.
+inline bool parse_pair(const std::string &body, bool &claimed, std::string &code,
+                       uint32_t &expires_in, uint32_t &poll) {
   JsonDocument doc = esphome::json::parse_json(body);
   if (doc.isNull()) return false;
   JsonObject root = doc.as<JsonObject>();
-  const char *ln = root["query"]["location"]["description"].as<const char *>();
-  out.header = shorten(ln ? ln : at, 12) + " arrivals";
-  if (!from.empty()) out.header += " from " + shorten(station_name(from), 12);
-  const char *core = root["systemStatus"]["rttCore"].as<const char *>();
-  const char *nr = root["systemStatus"]["realtimeNetworkRail"].as<const char *>();
-  out.degraded = (core && strcmp(core, "OK")) || (nr && strcmp(nr, "OK"));
+  if (!root["claimed"].is<bool>()) return false;
+  claimed = jbool(root["claimed"]);
+  code = jstr(root["code"], 16);
+  uint32_t e = juint(root["expires_in"]);
+  expires_in = (e >= 30 && e <= 3600) ? e : 900;
+  uint32_t p = juint(root["poll"]);
+  poll = (p >= 5 && p <= 600) ? p : 10;
+  return claimed || !code.empty();
+}
 
-  struct Tmp { std::string key; Row r; };
-  std::vector<Tmp> tmp;
-  for (JsonObject svc : root["services"].as<JsonArray>()) {
-    JsonObject td = svc["temporalData"], arr = td["arrival"], sm = svc["scheduleMetadata"], lm = svc["locationMetadata"];
-    const char *display = td["displayAs"].as<const char *>();
-    const char *booked = arr["scheduleAdvertised"].as<const char *>();
-    if (!booked || !display || !strcmp(display, "PASS")) continue;
-    if (sm["inPassengerService"].is<bool>() && !sm["inPassengerService"].as<bool>()) continue;
-    if (arr["realtimeActual"].as<const char *>()) continue;  // already arrived
-    Row r;
-    r.time = iso_hhmm(booked);
-    r.dest = shorten(dest_names(svc["origin"].as<JsonArray>()), 17);
-    const char *pa = lm["platform"]["actual"].as<const char *>(), *pp = lm["platform"]["planned"].as<const char *>();
-    r.plat = pa ? pa : (pp ? pp : "-");
-    const char *fc = arr["realtimeForecast"].as<const char *>();
-    if (!fc) fc = arr["realtimeEstimate"].as<const char *>();
-    bool cancelled = (arr["isCancelled"].is<bool>() && arr["isCancelled"].as<bool>()) || !strcmp(display, "CANCELLED") || !strcmp(display, "DIVERTED");
-    bool has_late = arr["realtimeAdvertisedLateness"].is<int>();
-    int late = has_late ? arr["realtimeAdvertisedLateness"].as<int>() : 0;
-    bool running_late = fc && (has_late ? late > 0 : iso_hhmm(fc) > r.time);
-    if (cancelled) { r.status = "Cancelled"; r.colour = "R"; }
-    else if (running_late) { r.status = "Delayed"; r.colour = "Y"; r.expected = iso_hhmm(fc); }
-    else if (fc && iso_hhmm(fc) < r.time) { r.status = "On time"; r.colour = "G"; r.expected = iso_hhmm(fc); }   // running early: show the earlier arrival
-    else if (fc) { r.status = "On time"; r.colour = "G"; }
-    else { r.status = "Scheduled"; r.colour = "W"; }
-    const char *mode = sm["modeType"].as<const char *>();
-    if (mode && strstr(mode, "BUS")) { r.status = "Bus • " + r.status; r.plat = "BUS"; }
-    JsonArray origins = svc["origin"].as<JsonArray>();
-    if (origins.size()) {
-      const char *os = origins[0]["temporalData"]["scheduleAdvertised"].as<const char *>();
-      if (os) { r.orig_sched = iso_hhmm(os); r.orig_sched_epoch = iso_epoch(os, nullptr, true, now_utc); }
-    }
-    int veh = lm["numberOfVehicles"].is<int>() ? lm["numberOfVehicles"].as<int>() : 0;
-    if (veh == 1) r.status += " • 1 coach";
-    else if (veh > 1) r.status += " • " + std::to_string(veh) + " coaches";
-    const char *uid = sm["uniqueIdentity"].as<const char *>();
-    r.uid = uid ? uid : "";
-    tmp.push_back({booked, r});
-  }
-  std::sort(tmp.begin(), tmp.end(), [](const Tmp &a, const Tmp &b) { return a.key < b.key; });
-  for (auto &t : tmp) { if (out.rows.size() >= 5) break; out.rows.push_back(t.r); }
-  if (out.degraded && !out.rows.empty()) out.rows.back().status += "  (RTT data limited)";
+// GET /v1/device/config: {claimed, poll, tz}.
+inline bool parse_config(const std::string &body, bool &claimed, uint32_t &poll) {
+  JsonDocument doc = esphome::json::parse_json(body);
+  if (doc.isNull()) return false;
+  JsonObject root = doc.as<JsonObject>();
+  if (!root["claimed"].is<bool>()) return false;
+  claimed = jbool(root["claimed"]);
+  uint32_t p = juint(root["poll"]);
+  poll = (p >= 5 && p <= 600) ? p : (claimed ? 60 : 10);
   return true;
 }
 
-// From a /service response: the actual departure time at the origin (first location), or "".
-inline std::string parse_origin_actual(const std::string &body) {
-  JsonDocument doc = esphome::json::parse_json(body);
-  if (doc.isNull()) return "";
-  JsonObject svc = doc["service"].is<JsonObject>() ? doc["service"].as<JsonObject>() : doc.as<JsonObject>();
-  JsonArray locs = svc["locations"].as<JsonArray>();
-  if (!locs.size()) return "";
-  const char *act = locs[0]["temporalData"]["departure"]["realtimeActual"].as<const char *>();
-  return act ? iso_hhmm(act) : "";
+// Path-safe subset of a service id before it is pasted into a request URL. The ids come from
+// our own backend, but nothing lifted out of a document reaches a URL unchecked.
+inline std::string url_token(const std::string &s) {
+  std::string o;
+  for (char c : s) {
+    if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+        c == '-' || c == '_' || c == '.' || c == '~')
+      o += c;
+    if (o.size() >= 48) break;
+  }
+  return o;
 }
 
-// Calling points for one train. Body lines separated by '\n'.
-inline bool parse_detail(const std::string &body, const std::string &from, std::string &header, std::string &text) {
+// GET /v1/device/service/<id>: {hdr, lines[]}, already formatted for the device font.
+inline bool parse_service(const std::string &body, std::string &header, std::string &text) {
   JsonDocument doc = esphome::json::parse_json(body);
   if (doc.isNull()) return false;
-  JsonObject svc = doc["service"].is<JsonObject>() ? doc["service"].as<JsonObject>() : doc.as<JsonObject>();
-  JsonObject sm = svc["scheduleMetadata"];
-  JsonArray locs = svc["locations"].as<JsonArray>();
-  size_t n = locs.size();
-  const char *origin = n ? locs[0]["location"]["description"].as<const char *>() : nullptr;
-  const char *dest = n ? locs[n - 1]["location"]["description"].as<const char *>() : nullptr;
-  header = shorten(origin ? origin : "?", 16) + " to " + shorten(dest ? dest : "?", 16);
-  const char *hc = sm["trainReportingIdentity"].as<const char *>();
-  if (hc) { header += " • "; header += hc; }
-  for (JsonObject l : locs) {
-    int veh = l["locationMetadata"]["numberOfVehicles"].is<int>() ? l["locationMetadata"]["numberOfVehicles"].as<int>() : 0;
-    if (veh) { header += " • " + std::to_string(veh) + " coaches"; break; }
-  }
-  const char *op = sm["operator"]["name"].as<const char *>();
-  if (op) header += " • " + shorten(op, 12);
-
-  std::string from_name = station_name(from);
-  bool started = false;
-  std::vector<std::string> lines;
-  for (JsonObject l : locs) {
-    JsonObject loc = l["location"], td = l["temporalData"];
-    if (!started) {
-      bool hit = false;
-      for (const char *c : loc["shortCodes"].as<JsonArray>()) if (c && from == c) hit = true;
-      for (const char *c : loc["longCodes"].as<JsonArray>()) if (c && from == c) hit = true;
-      const char *dn = loc["description"].as<const char *>();
-      if (dn && from_name == dn) hit = true;
-      if (!hit) continue;
-      started = true;
-    }
-    const char *display = td["displayAs"].as<const char *>();
-    if (!display || !strcmp(display, "PASS")) continue;
-    JsonObject dep = td["departure"], arr = td["arrival"];
-    const char *t = dep["realtimeForecast"].as<const char *>();
-    if (!t) t = dep["realtimeActual"].as<const char *>();
-    if (!t) t = dep["scheduleAdvertised"].as<const char *>();
-    if (!t) t = arr["realtimeForecast"].as<const char *>();
-    if (!t) t = arr["realtimeActual"].as<const char *>();
-    if (!t) t = arr["scheduleAdvertised"].as<const char *>();
-    const char *dn = loc["description"].as<const char *>();
-    std::string line = (t ? iso_hhmm(t) : "--:--") + "  " + shorten(dn ? dn : "?", 22);
-    const char *pa = l["locationMetadata"]["platform"]["actual"].as<const char *>();
-    const char *pp = l["locationMetadata"]["platform"]["planned"].as<const char *>();
-    if (pa || pp) { line += "  P"; line += pa ? pa : pp; }
-    bool cancelled = !strcmp(display, "CANCELLED") || (dep["isCancelled"].is<bool>() && dep["isCancelled"].as<bool>());
-    if (cancelled) line += "  (cancelled)";
-    else if (dest && dn && !strcmp(dest, dn)) line += "  (arr)";
-    lines.push_back(line);
-  }
-  if (!started) {
-    for (JsonObject l : locs) {
-      const char *display = l["temporalData"]["displayAs"].as<const char *>();
-      if (!display || !strcmp(display, "PASS")) continue;
-      const char *t = l["temporalData"]["departure"]["scheduleAdvertised"].as<const char *>();
-      const char *dn = l["location"]["description"].as<const char *>();
-      lines.push_back((t ? iso_hhmm(t) : "--:--") + "  " + shorten(dn ? dn : "?", 22));
-    }
-  }
-  const size_t max_lines = 13;
-  if (lines.size() > max_lines) {
-    size_t extra = lines.size() - (max_lines - 1);
-    lines.resize(max_lines - 1);
-    lines.push_back("... " + std::to_string(extra) + " more stops");
-  }
+  JsonObject root = doc.as<JsonObject>();
+  if (!root["lines"].is<JsonArray>()) return false;
+  header = jstr(root["hdr"], 72);
   text.clear();
-  for (auto &l : lines) { if (!text.empty()) text += "\n"; text += l; }
-  if (text.empty()) text = "No calling point data";
-  return true;
-}
-
-// Agenda JSON from calendar-proxy: {"cal":"...","e":[{"d":"YYYYMMDD","w":"Fri 11 Sep","t":"16:15","u":"17:00","s":"...","a":0},...]}
-inline bool parse_calendar(const std::string &body, std::string &name, std::vector<CalItem> &items) {
-  JsonDocument doc = esphome::json::parse_json(body);
-  if (doc.isNull()) return false;
-  JsonObject root = doc.as<JsonObject>();
-  if (!root["e"].is<JsonArray>()) return false;
-  const char *cn = root["cal"].as<const char *>();
-  name = cn ? cn : "Calendar";
-  items.clear();
-  for (JsonObject e : root["e"].as<JsonArray>()) {
-    CalItem it;
-    const char *d = e["d"].as<const char *>(), *w = e["w"].as<const char *>(), *t = e["t"].as<const char *>();
-    const char *u = e["u"].as<const char *>(), *sm = e["s"].as<const char *>(), *l = e["l"].as<const char *>();
-    if (!d || !w) continue;
-    it.d = d; it.w = w; it.t = t ? t : ""; it.u = u ? u : ""; it.s = sm ? sm : ""; it.l = l ? l : "";
-    it.all_day = e["a"].is<int>() && e["a"].as<int>() == 1;
-    items.push_back(it);
+  int n = 0;
+  JsonArray lines = root["lines"].as<JsonArray>();
+  for (JsonVariant l : lines) {
+    if (n++ >= 13) break;
+    std::string line = jstr(l, 64);
+    if (!text.empty()) text += "\n";
+    text += line;
   }
+  if (text.empty()) text = "No calling point data";
   return true;
 }
 
@@ -462,18 +340,32 @@ inline const char *signal_bars(int rssi) {
 
 #ifdef USE_WIFI
 // ---------------------------------------------------------------- background HTTP fetcher
-// One FreeRTOS task performs GET requests so the main loop (LVGL, touch) never blocks on the
+// One FreeRTOS task performs the request so the main loop (LVGL, touch) never blocks on the
 // network. The main loop submits a Job, polls for the Result, and does all parsing/drawing.
-enum JobKind { JOB_TOKEN, JOB_BOARD, JOB_DETAIL, JOB_CAL, JOB_ORIGIN };
-struct Job { JobKind kind = JOB_BOARD; std::string url, auth, tag; int board = 0; };
-struct Result { JobKind kind = JOB_BOARD; int status = -1; std::string body, tag; int board = 0; };
+enum JobKind { JOB_PAIR, JOB_CONFIG, JOB_SCREEN, JOB_SETTINGS, JOB_DETAIL };
+enum JobMethod { M_GET, M_POST, M_PATCH };
+struct Job {
+  JobKind kind = JOB_SCREEN;
+  JobMethod method = M_GET;
+  std::string url, auth, body, inm, tag;
+  int board = 0;
+};
+struct Result {
+  JobKind kind = JOB_SCREEN;
+  int status = -1;            // < 0: the request never completed
+  std::string body, etag, tag;
+  int board = 0;
+};
+
+// A screen document is under 8 KB by contract; the cap is generous headroom, not a target.
+static const size_t MAX_BODY = 65536;
 
 class Fetcher {
  public:
   void start() {
     if (task_) return;
     mutex_ = xSemaphoreCreateMutex();
-    xTaskCreatePinnedToCore(&Fetcher::run, "tb_fetch", 16384, this, 3, &task_, 0);
+    xTaskCreatePinnedToCore(&Fetcher::run, "hb_fetch", 16384, this, 3, &task_, 0);
   }
   bool busy() { Lock l(mutex_); return busy_ || has_job_; }
   bool submit(Job j) {
@@ -514,6 +406,17 @@ class Fetcher {
       self->busy_ = false;
     }
   }
+  // esp_http_client_get_header() reads the REQUEST header list, so the response ETag has to be
+  // picked up from the header event instead. user_data points at the Result's etag string.
+  static esp_err_t on_event(esp_http_client_event_t *e) {
+    if (e->event_id == HTTP_EVENT_ON_HEADER && e->user_data && e->header_key && e->header_value &&
+        strcasecmp(e->header_key, "ETag") == 0) {
+      auto *s = static_cast<std::string *>(e->user_data);
+      s->assign(e->header_value);
+      if (s->size() > 96) s->resize(96);
+    }
+    return ESP_OK;
+  }
   static Result do_request(const Job &j) {
     Result r;
     r.kind = j.kind;
@@ -521,24 +424,34 @@ class Fetcher {
     r.tag = j.tag;
     esp_http_client_config_t cfg = {};
     cfg.url = j.url.c_str();
-    cfg.method = HTTP_METHOD_GET;
+    cfg.method = j.method == M_POST ? HTTP_METHOD_POST : (j.method == M_PATCH ? HTTP_METHOD_PATCH : HTTP_METHOD_GET);
     cfg.timeout_ms = 20000;
-    cfg.crt_bundle_attach = esp_crt_bundle_attach;
-    cfg.buffer_size = 4096;      // RTT sends many response headers
+    cfg.crt_bundle_attach = esp_crt_bundle_attach;   // TLS verified against the ESP-IDF bundle
+    cfg.buffer_size = 4096;
     cfg.buffer_size_tx = 2048;
+    cfg.event_handler = &Fetcher::on_event;
+    cfg.user_data = &r.etag;
     esp_http_client_handle_t c = esp_http_client_init(&cfg);
     if (!c) return r;
-    esp_http_client_set_header(c, "Authorization", j.auth.c_str());
-    esp_http_client_set_header(c, "User-Agent", "trainboard/1.0");
+    if (!j.auth.empty()) esp_http_client_set_header(c, "Authorization", j.auth.c_str());
+    if (!g_fw.empty()) esp_http_client_set_header(c, "X-Firmware", g_fw.c_str());
     esp_http_client_set_header(c, "Accept", "application/json");
-    if (esp_http_client_open(c, 0) != ESP_OK) { esp_http_client_cleanup(c); return r; }
+    if (!j.body.empty()) esp_http_client_set_header(c, "Content-Type", "application/json");
+    if (!j.inm.empty()) esp_http_client_set_header(c, "If-None-Match", j.inm.c_str());
+    if (esp_http_client_open(c, (int) j.body.size()) != ESP_OK) { esp_http_client_cleanup(c); return r; }
+    if (!j.body.empty() && esp_http_client_write(c, j.body.data(), (int) j.body.size()) < 0) {
+      esp_http_client_close(c);
+      esp_http_client_cleanup(c);
+      return r;
+    }
     if (esp_http_client_fetch_headers(c) < 0) { esp_http_client_close(c); esp_http_client_cleanup(c); return r; }
     r.status = esp_http_client_get_status_code(c);
+    // 304 carries no body and falls straight out of the read loop.
     char buf[2048];
     int n;
     while ((n = esp_http_client_read(c, buf, sizeof buf)) > 0) {
       r.body.append(buf, n);
-      if (r.body.size() > 400000) break;
+      if (r.body.size() > MAX_BODY) break;
     }
     esp_http_client_close(c);
     esp_http_client_cleanup(c);
@@ -553,9 +466,5 @@ class Fetcher {
 };
 inline Fetcher g_fetcher;
 #endif
-
-inline std::string strip_ns(const std::string &uid) {
-  return uid.rfind("gb-nr:", 0) == 0 ? uid.substr(6) : uid;
-}
 
 }  // namespace tb
