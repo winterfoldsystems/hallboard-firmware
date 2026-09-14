@@ -10,7 +10,9 @@
 // panel misbehaves with the carousel.
 #pragma once
 
-#define HB_CAROUSEL 1
+// Decided on the wall board on 14 September 2026: the snap carousel needs a drag past the
+// midpoint and cannot wrap, so the gesture fallback (a short flick, wrapping) is the one shipped.
+#define HB_CAROUSEL 0
 
 #include <cctype>
 #include <cstdint>
