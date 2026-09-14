@@ -17,11 +17,15 @@
 #include "hb_ui.h"
 #include "stations.h"
 #ifdef USE_WIFI
+#include <atomic>
 #include <strings.h>
 #include <esp_wifi.h>
 #include <esp_random.h>
 #include <esp_http_client.h>
 #include <esp_crt_bundle.h>
+#include <esp_ota_ops.h>
+#include <esp_partition.h>
+#include <mbedtls/sha256.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/semphr.h>
@@ -302,6 +306,92 @@ inline std::string url_token(const std::string &s) {
   return o;
 }
 
+// Scheme and host of an https URL, lowercased, or "" when the URL is not one this device will
+// fetch. Only https is accepted, a userinfo section ("https://user@host/") is refused outright so
+// no credential-bearing or host-confusing URL can reach esp_http_client, and the port is dropped
+// so the host can be compared to the backend's name exactly.
+inline std::string url_host(const std::string &url) {
+  if (url.size() > 512 || url.rfind("https://", 0) != 0) return "";
+  size_t start = 8;
+  size_t end = url.find_first_of("/?#", start);
+  std::string hostport = url.substr(start, end == std::string::npos ? std::string::npos : end - start);
+  if (hostport.empty() || hostport.find('@') != std::string::npos) return "";
+  size_t colon = hostport.find(':');
+  if (colon != std::string::npos) hostport.resize(colon);
+  if (hostport.empty()) return "";
+  for (char c : hostport) {
+    bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '.';
+    if (!ok) return "";
+  }
+  for (auto &c : hostport) c = tolower((unsigned char) c);
+  return hostport;
+}
+
+// The one host that ever receives the device credential. GitHub and any object store the manifest
+// points at are public and must never see the bearer token.
+inline const char *BACKEND_HOST = "api.hallboard.co.uk";
+
+// Length-independent comparison, so a digest mismatch leaks nothing through timing.
+inline bool ct_equal(const std::string &a, const std::string &b) {
+  if (a.size() != b.size()) return false;
+  unsigned char diff = 0;
+  for (size_t i = 0; i < a.size(); i++) diff |= (unsigned char) (a[i] ^ b[i]);
+  return diff == 0;
+}
+
+// ---------------------------------------------------------------- firmware manifest
+// GET /v1/device/firmware answers {"version": null} or {version, url, sha256, size, force}.
+// Every field here decides what gets written to the other app slot, so each one is bounds-checked
+// before it is kept and a malformed offer is dropped whole rather than half-applied.
+struct FwOffer {
+  std::string version, url, sha256;
+  uint32_t size = 0;
+  bool force = false;
+  bool valid() const { return !version.empty(); }
+};
+
+// Largest image this firmware will accept: comfortably inside the 0x3C0000 app slot.
+static const uint32_t MAX_FW_SIZE = 3900000;
+
+inline bool fw_version_ok(const std::string &v) {
+  if (v.empty() || v.size() > 16) return false;
+  bool digit = false;
+  for (char c : v) {
+    if (c >= '0' && c <= '9') digit = true;
+    else if (c != '.') return false;
+  }
+  return digit;
+}
+inline bool hex64_lower(const std::string &s) {
+  if (s.size() != 64) return false;
+  for (char c : s) if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
+  return true;
+}
+
+// true when the answer was understood; out.valid() is false for "nothing on offer". Strings are
+// read one step longer than the limit so a value that is too long fails validation instead of
+// being silently truncated into a valid-looking one.
+inline bool parse_firmware(const std::string &body, FwOffer &out) {
+  out = FwOffer();
+  JsonDocument doc = esphome::json::parse_json(body);
+  if (doc.isNull()) return false;
+  JsonObject root = doc.as<JsonObject>();
+  if (root.isNull()) return false;
+  if (!root["version"].is<const char *>()) return true;   // {"version": null}: nothing on offer
+  FwOffer o;
+  o.version = jstr(root["version"], 32);
+  o.url = jstr(root["url"], 512);
+  o.sha256 = jstr(root["sha256"], 128);
+  o.size = juint(root["size"]);
+  o.force = jbool(root["force"]);
+  if (!fw_version_ok(o.version)) return false;
+  if (o.url.size() > 256 || url_host(o.url).empty()) return false;
+  if (!hex64_lower(o.sha256)) return false;
+  if (o.size == 0 || o.size > MAX_FW_SIZE) return false;
+  out = o;
+  return true;
+}
+
 // GET /v1/device/service/<id>: {hdr, lines[]}, already formatted for the device font.
 inline bool parse_service(const std::string &body, std::string &header, std::string &text) {
   JsonDocument doc = esphome::json::parse_json(body);
@@ -361,13 +451,15 @@ inline const char *signal_bars(int rssi) {
 // ---------------------------------------------------------------- background HTTP fetcher
 // One FreeRTOS task performs the request so the main loop (LVGL, touch) never blocks on the
 // network. The main loop submits a Job, polls for the Result, and does all parsing/drawing.
-enum JobKind { JOB_PAIR, JOB_CONFIG, JOB_SCREEN, JOB_SETTINGS, JOB_DETAIL };
+enum JobKind { JOB_PAIR, JOB_CONFIG, JOB_SCREEN, JOB_SETTINGS, JOB_DETAIL, JOB_FIRMWARE, JOB_OTA, JOB_FWRESULT };
 enum JobMethod { M_GET, M_POST, M_PATCH };
 struct Job {
   JobKind kind = JOB_SCREEN;
   JobMethod method = M_GET;
   std::string url, auth, body, inm, tag;
   int board = 0;
+  std::string sha;            // JOB_OTA: the announced SHA-256, 64 lowercase hex
+  uint32_t size = 0;          // JOB_OTA: the announced image size, enforced exactly
 };
 struct Result {
   JobKind kind = JOB_SCREEN;
@@ -375,17 +467,26 @@ struct Result {
   std::string body, etag, tag;
   int board = 0;
   uint32_t poll_after = 0;    // seconds from the Poll-After response header, 0 if absent
+  std::string err;            // JOB_OTA: short failure code, empty on success
 };
 
 // A screen document is under 8 KB by contract; the cap is generous headroom, not a target.
+// It does not apply to JOB_OTA, whose cap is the announced image size.
 static const size_t MAX_BODY = 65536;
+
+// Download progress, 0 to 100, published by the fetch task and read by the main loop so the clock
+// page can show it. -1 means no install is running.
+inline std::atomic<int> g_ota_pct{-1};
 
 class Fetcher {
  public:
   void start() {
     if (task_) return;
     mutex_ = xSemaphoreCreateMutex();
-    xTaskCreatePinnedToCore(&Fetcher::run, "hb_fetch", 16384, this, 3, &task_, 0);
+    // 20 KB: the TLS handshake with the certificate bundle is the deep part, and a firmware
+    // install adds a 2 KB read buffer, an mbedtls SHA-256 context and the flash writes on top of
+    // it. 16 KB carried 1a and 1b; the extra 4 KB is headroom for the install path.
+    xTaskCreatePinnedToCore(&Fetcher::run, "hb_fetch", 20480, this, 3, &task_, 0);
   }
   bool busy() { Lock l(mutex_); return busy_ || has_job_; }
   bool submit(Job j) {
@@ -419,7 +520,9 @@ class Fetcher {
         if (self->has_job_) { j = std::move(self->job_); self->has_job_ = false; self->busy_ = true; got = true; }
       }
       if (!got) { vTaskDelay(pdMS_TO_TICKS(50)); continue; }
-      Result r = do_request(j);
+      // The install runs here, on the fetch task, so LVGL and touch keep running for the whole
+      // download. It is the one job that writes flash rather than returning a body.
+      Result r = j.kind == JOB_OTA ? do_ota(j) : do_request(j);
       Lock l(self->mutex_);
       self->result_ = std::move(r);
       self->has_result_ = true;
@@ -490,6 +593,160 @@ class Fetcher {
     }
     esp_http_client_close(c);
     esp_http_client_cleanup(c);
+    return r;
+  }
+
+  // ---------------------------------------------------------------- firmware install
+  // Only the Location header matters on the redirect hops, so the OTA download uses its own
+  // event handler rather than the Result-shaped one above.
+  struct OtaCtx { std::string location; };
+  static esp_err_t on_ota_event(esp_http_client_event_t *e) {
+    if (e->event_id != HTTP_EVENT_ON_HEADER || !e->user_data || !e->header_key || !e->header_value) {
+      return ESP_OK;
+    }
+    auto *ctx = static_cast<OtaCtx *>(e->user_data);
+    if (strcasecmp(e->header_key, "Location") == 0) {
+      ctx->location.assign(e->header_value);
+      if (ctx->location.size() > 512) ctx->location.resize(512);
+    }
+    return ESP_OK;
+  }
+
+  // Streams the image straight into the inactive app slot: 2 KB at a time, hashed on the way past,
+  // never buffered whole. The running slot is untouched, so losing power here leaves the board on
+  // the firmware it already had. Failure codes: download, size, sha256, verify, write, timeout,
+  // redirect.
+  static Result do_ota(const Job &j) {
+    Result r;
+    r.kind = JOB_OTA;
+    r.tag = j.tag;              // the offered version, echoed back in the result post
+    g_ota_pct.store(0);
+
+    const esp_partition_t *part = esp_ota_get_next_update_partition(nullptr);
+    if (part == nullptr) { r.err = "verify"; g_ota_pct.store(-1); return r; }
+    if (j.size > part->size) { r.err = "size"; g_ota_pct.store(-1); return r; }
+
+    esp_ota_handle_t handle = 0;
+    // OTA_WITH_SEQUENTIAL_WRITES erases sector by sector as the stream arrives, so the task never
+    // blocks on a 3.7 MB erase up front.
+    if (esp_ota_begin(part, OTA_WITH_SEQUENTIAL_WRITES, &handle) != ESP_OK) {
+      r.err = "write";
+      g_ota_pct.store(-1);
+      return r;
+    }
+
+    mbedtls_sha256_context sha;
+    mbedtls_sha256_init(&sha);
+    mbedtls_sha256_starts(&sha, 0);
+
+    const char *err = nullptr;
+    std::string url = j.url;
+    uint32_t got = 0;
+    int hops = 0, last_pct = 0;
+
+    for (;;) {
+      std::string host = url_host(url);
+      if (host.empty()) { err = "redirect"; break; }   // https only, and nothing exotic
+      OtaCtx ctx;
+      esp_http_client_config_t cfg = {};
+      cfg.url = url.c_str();
+      cfg.method = HTTP_METHOD_GET;
+      cfg.timeout_ms = 30000;
+      cfg.crt_bundle_attach = esp_crt_bundle_attach;
+      cfg.buffer_size = 2048;
+      cfg.buffer_size_tx = 1024;
+      cfg.event_handler = &Fetcher::on_ota_event;
+      cfg.user_data = &ctx;
+      cfg.disable_auto_redirect = true;   // redirects are followed here, with the host re-checked
+      esp_http_client_handle_t c = esp_http_client_init(&cfg);
+      if (c == nullptr) { err = "download"; break; }
+      // The device credential goes to the backend and nowhere else. A release asset lives on a
+      // public host, so neither the bearer nor anything about this device is set for it.
+      if (host == BACKEND_HOST) {
+        if (!j.auth.empty()) esp_http_client_set_header(c, "Authorization", j.auth.c_str());
+        if (!g_fw.empty()) esp_http_client_set_header(c, "X-Firmware", g_fw.c_str());
+      }
+      esp_http_client_set_header(c, "Accept", "application/octet-stream");
+      if (esp_http_client_open(c, 0) != ESP_OK) {
+        esp_http_client_cleanup(c);
+        err = "download";
+        break;
+      }
+      if (esp_http_client_fetch_headers(c) < 0) {
+        esp_http_client_close(c);
+        esp_http_client_cleanup(c);
+        err = "download";
+        break;
+      }
+      int status = esp_http_client_get_status_code(c);
+      if (status == 301 || status == 302 || status == 303 || status == 307 || status == 308) {
+        std::string next = ctx.location;
+        esp_http_client_close(c);
+        esp_http_client_cleanup(c);
+        // Absolute https only: a relative or downgraded Location is refused rather than resolved.
+        if (++hops > 3 || next.empty() || url_host(next).empty()) { err = "redirect"; break; }
+        url = next;
+        continue;
+      }
+      if (status != 200) {
+        esp_http_client_close(c);
+        esp_http_client_cleanup(c);
+        err = "download";
+        break;
+      }
+
+      char buf[2048];
+      int n;
+      while ((n = esp_http_client_read(c, buf, sizeof buf)) > 0) {
+        if (got + (uint32_t) n > j.size) { err = "size"; break; }
+        mbedtls_sha256_update(&sha, (const unsigned char *) buf, (size_t) n);
+        if (esp_ota_write(handle, buf, (size_t) n) != ESP_OK) { err = "write"; break; }
+        got += (uint32_t) n;
+        int pct = (int) ((uint64_t) got * 100 / j.size);
+        if (pct != last_pct) { last_pct = pct; g_ota_pct.store(pct); }
+      }
+      if (err == nullptr && n < 0) err = "timeout";
+      esp_http_client_close(c);
+      esp_http_client_cleanup(c);
+      break;
+    }
+
+    unsigned char digest[32];
+    mbedtls_sha256_finish(&sha, digest);
+    mbedtls_sha256_free(&sha);
+
+    if (err == nullptr && got != j.size) err = "size";
+    if (err == nullptr) {
+      static const char *HEX = "0123456789abcdef";
+      std::string hex;
+      hex.reserve(64);
+      for (unsigned char b : digest) { hex += HEX[(b >> 4) & 0xF]; hex += HEX[b & 0xF]; }
+      if (!ct_equal(hex, j.sha)) err = "sha256";
+    }
+    if (err != nullptr) {
+      esp_ota_abort(handle);
+      ESP_LOGW("hb", "firmware install failed (%s) after %u bytes", err, (unsigned) got);
+      r.err = err;
+      g_ota_pct.store(-1);
+      return r;
+    }
+    // esp_ota_end verifies the image header and, where signing is configured, its signature. It
+    // releases the handle either way, so there is nothing left to abort after it.
+    if (esp_ota_end(handle) != ESP_OK) {
+      ESP_LOGW("hb", "firmware image rejected by esp_ota_end");
+      r.err = "verify";
+      g_ota_pct.store(-1);
+      return r;
+    }
+    if (esp_ota_set_boot_partition(part) != ESP_OK) {
+      ESP_LOGW("hb", "could not select the new boot partition");
+      r.err = "verify";
+      g_ota_pct.store(-1);
+      return r;
+    }
+    ESP_LOGI("hb", "firmware image written and verified: %u bytes", (unsigned) got);
+    g_ota_pct.store(100);
+    r.status = 200;
     return r;
   }
 

@@ -9,12 +9,18 @@
 # Wi-Fi is set up on the device: long-press the side button (0.7 to 6 s), pick a network, type the
 # password. Credentials are saved in flash. Holding the button 8 to 15 s is a factory reset: the
 # device secret is wiped and the board re-pairs.
+#
+# From Phase 1c the board updates itself: it asks GET /v1/device/firmware for a manifest, streams
+# the offered image into the spare app slot over TLS, checks its SHA-256, and reboots into it. The
+# bootloader rolls back to the previous slot if the new image never confirms a good boot, which
+# safe_mode does once the backend answers (or after ten minutes as the safety net). The bootloader
+# and the partition table are never written.
 # Shared parts live in hardware.yaml / ui.yaml; the pages in hb_ui.h, the logic in
 # trainboard_logic.h.
 
 substitutions:
   backend_base: "https://api.hallboard.co.uk"
-  fw_version: "1b.0"
+  fw_version: "1.3.0"
 
 esphome:
   name: hallboard
@@ -46,6 +52,18 @@ esphome:
           hb::g_event = [](const std::string &msg) { id(ev).execute(msg); };
           hb::g_host.attach(id(content_page)->obj);
       - lambda: |-
+          // Straight after an over-the-air update the bootloader leaves the new image pending
+          // until the boot is confirmed. Say which version is running while that is true, for a
+          // minute at most, and confirm_boot clears it as soon as the backend answers.
+          const esp_partition_t *running = esp_ota_get_running_partition();
+          esp_ota_img_states_t ota_state = ESP_OTA_IMG_UNDEFINED;
+          if (running != nullptr && esp_ota_get_state_partition(running, &ota_state) == ESP_OK &&
+              ota_state == ESP_OTA_IMG_PENDING_VERIFY) {
+            ESP_LOGI("hb", "running a pending image, version ${fw_version}");
+            hb::g_host.set_notice("Updated to ${fw_version}");
+            id(fw_notice_until) = millis() + 60000;
+          }
+      - lambda: |-
           tb::g_fetcher.start();
           wifi::global_wifi_component->set_keep_scan_results(true);
           if (wifi::global_wifi_component->has_sta()) {
@@ -60,6 +78,31 @@ esphome:
 packages:
   hardware: !include hardware.yaml
   ui: !include ui.yaml
+
+# Two app slots and a bootloader rollback. ESPHome marks the running image valid in arch_init
+# unless USE_OTA_ROLLBACK is defined, and that needs an `ota:` platform and an enabled `safe_mode:`
+# together; with both here, confirming a good boot moves into safe_mode and into our own
+# mark_successful() call. hardware.yaml owns the esp32 block; this merges the one key into it.
+esp32:
+  framework:
+    advanced:
+      enable_ota_rollback: true
+
+# http_request is the only OTA platform in the config: it opens no socket and nothing listens on
+# the device. The install itself is ours (trainboard_logic.h) because ESPHome's flash action is
+# MD5-only and cannot carry the device credential; this block exists for the rollback pin above.
+ota:
+  - platform: http_request
+
+# Five bad boots in a row drop into safe mode; a boot is good once the backend answers (see the
+# confirm_boot script) or after ten minutes. boot_is_good_on_shutdown is off so a restart cannot
+# confirm an image that has not proved itself.
+safe_mode:
+  id: safe_mode_1
+  num_attempts: 5
+  boot_is_good_after: 10min
+  boot_is_good_on_shutdown: false
+  reboot_timeout: 5min
 
 # No networks in the config: credentials come from the on-device Wi-Fi setup page (saved in flash).
 # improv_serial also lets the ESPHome web flasher set Wi-Fi over USB, and satisfies ESPHome's
@@ -141,6 +184,21 @@ globals:
   - {id: night_brightness, type: int, initial_value: '20'}
   - {id: night_lift_until, type: uint32_t, initial_value: '0'}
   - {id: applied_brightness, type: int, initial_value: '-1'}
+  # Firmware updates. None of this is restored across boots: a manifest check is cheap, and an
+  # interrupted install must start again from the manifest rather than from a half-written slot.
+  - {id: boot_confirmed, type: bool, initial_value: 'false'}
+  - {id: fw_check_at, type: uint32_t, initial_value: '0'}   # 0 until the backend has answered once
+  - {id: fw_have_offer, type: bool, initial_value: 'false'}
+  - {id: fw_offered, type: std::string}
+  - {id: fw_url, type: std::string}
+  - {id: fw_sha, type: std::string}
+  - {id: fw_size, type: uint32_t, initial_value: '0'}
+  - {id: fw_force, type: bool, initial_value: 'false'}
+  - {id: fw_installing, type: bool, initial_value: 'false'}
+  - {id: fw_result_body, type: std::string}
+  - {id: fw_reboot_at, type: uint32_t, initial_value: '0'}
+  - {id: fw_notice_until, type: uint32_t, initial_value: '0'}
+  - {id: fw_pct_shown, type: int, initial_value: '-1'}
 
 script:
   # ---- UI event dispatcher. hb_ui.h posts the same messages the fixed 1a pages posted.
@@ -395,6 +453,24 @@ script:
       - lambda: |-
           App.safe_reboot();
 
+  # ---- the boot is good once the backend has answered: the network, TLS, the credential and the
+  # renderer have all worked end to end, which is the thing a rolled-back image would fail at.
+  # safe_mode confirms the image anyway after ten minutes so an unreachable backend cannot cause a
+  # rollback; a crash loop still rolls back through the bootloader long before that.
+  - id: confirm_boot
+    then:
+      - lambda: |-
+          if (id(boot_confirmed)) return;
+          id(boot_confirmed) = true;
+          id(safe_mode_1)->mark_successful();
+          ESP_LOGI("hb", "boot confirmed");
+          // First firmware check two minutes later, then every six hours.
+          if (!id(fw_check_at)) id(fw_check_at) = millis() + 120000;
+          if (id(fw_notice_until)) {
+            id(fw_notice_until) = 0;
+            hb::g_host.set_notice("");
+          }
+
   # ---- calling points for one train (long press); queued if the fetcher is busy
   - id: fetch_detail
     parameters:
@@ -409,8 +485,8 @@ script:
       - lambda: |-
           // Queued work, submitted as soon as the fetch task is free. Settings go first so a
           // station change is registered before the next screen poll.
-          if (!tb::g_fetcher.busy() && id(claimed) && tb::secret_valid(id(device_secret))) {
-            if (!id(pending_settings).empty()) {
+          if (!tb::g_fetcher.busy() && tb::secret_valid(id(device_secret)) && !id(fw_installing)) {
+            if (id(claimed) && !id(pending_settings).empty()) {
               tb::Job j;
               j.kind = tb::JOB_SETTINGS;
               j.method = tb::M_PATCH;
@@ -418,7 +494,7 @@ script:
               j.auth = std::string("Bearer ") + id(device_secret);
               j.body = id(pending_settings);
               if (tb::g_fetcher.submit(j)) id(pending_settings).clear();
-            } else if (!id(pending_detail).empty()) {
+            } else if (id(claimed) && !id(pending_detail).empty()) {
               std::string sid = tb::url_token(id(pending_detail));
               if (sid.empty()) {
                 id(pending_detail).clear();
@@ -428,6 +504,54 @@ script:
                 j.url = "${backend_base}/v1/device/service/" + sid;
                 j.auth = std::string("Bearer ") + id(device_secret);
                 if (tb::g_fetcher.submit(j)) id(pending_detail).clear();
+              }
+            } else if (!id(fw_result_body).empty()) {
+              // How the install went, so a rollout can be watched from the backend.
+              tb::Job j;
+              j.kind = tb::JOB_FWRESULT;
+              j.method = tb::M_POST;
+              j.url = "${backend_base}/v1/device/firmware/result";
+              j.auth = std::string("Bearer ") + id(device_secret);
+              j.body = id(fw_result_body);
+              if (tb::g_fetcher.submit(j)) id(fw_result_body).clear();
+            } else if (wifi::global_wifi_component->is_connected() &&
+                       id(pending_settings).empty() && id(pending_detail).empty() && !id(detail_until)) {
+              // Firmware work never interrupts a settings PATCH or a detail fetch, and never runs
+              // with the network down.
+              bool window = false;
+              if (id(fw_force) || !id(claimed)) {
+                window = true;                       // forced, or unpaired and so not in use yet
+              } else if (millis() > 86400000UL) {
+                window = true;                       // up over a day: the quiet window was missed
+              } else {
+                auto t = id(sntp_time).now();
+                window = t.is_valid() && t.hour >= 2 && t.hour < 5;   // 02:00 to 05:00 local
+              }
+              if (id(fw_have_offer) && window) {
+                tb::Job j;
+                j.kind = tb::JOB_OTA;
+                j.url = id(fw_url);
+                j.auth = std::string("Bearer ") + id(device_secret);
+                j.sha = id(fw_sha);
+                j.size = id(fw_size);
+                j.tag = id(fw_offered);
+                if (tb::g_fetcher.submit(j)) {
+                  id(fw_installing) = true;
+                  id(fw_have_offer) = false;
+                  id(fw_pct_shown) = -1;
+                  id(fw_notice_until) = 0;
+                  ESP_LOGI("hb", "installing firmware %s, %u bytes", id(fw_offered).c_str(),
+                           (unsigned) id(fw_size));
+                  hb::g_host.set_notice("Updating firmware 0%");
+                }
+              } else if (!id(fw_have_offer) && id(fw_check_at) &&
+                         (int32_t) (millis() - id(fw_check_at)) >= 0) {
+                tb::Job j;
+                j.kind = tb::JOB_FIRMWARE;
+                j.url = "${backend_base}/v1/device/firmware";
+                j.auth = std::string("Bearer ") + id(device_secret);
+                // Six hours to the next check, set here so a failed check waits too.
+                if (tb::g_fetcher.submit(j)) id(fw_check_at) = millis() + 21600000UL;
               }
             }
           }
@@ -449,6 +573,7 @@ script:
             id(pair_expires_at) = 0;
             id(detail_until) = 0;
             id(pending_detail).clear();
+            id(fw_have_offer) = false;   // an offer made to the old claim is not ours to install
             id(backoff_ms) = 0;
             id(next_poll_at) = millis();
             id(page_restored) = true;
@@ -468,6 +593,55 @@ script:
             if (!tb::parse_service(r.body, hdr, text)) { lv_label_set_text(id(detail_body), "Could not read details"); return; }
             lv_label_set_text(id(detail_hdr), hdr.c_str());
             lv_label_set_text(id(detail_body), text.c_str());
+            return;
+          }
+
+          // Firmware jobs have their own cadence and never touch the screen poll: a manifest that
+          // is late, rate limited or missing must not slow the board down or paint an error on it.
+          if (r.kind == tb::JOB_FIRMWARE) {
+            if (r.status != 200) { ESP_LOGD("hb", "firmware check: HTTP %d", r.status); return; }
+            tb::FwOffer offer;
+            if (!tb::parse_firmware(r.body, offer)) {
+              ESP_LOGW("hb", "firmware offer rejected: out of shape");
+              return;
+            }
+            if (!offer.valid()) return;                      // nothing on offer
+            if (offer.version == "${fw_version}") return;    // already running it
+            id(fw_offered) = offer.version;
+            id(fw_url) = offer.url;
+            id(fw_sha) = offer.sha256;
+            id(fw_size) = offer.size;
+            id(fw_force) = offer.force;
+            id(fw_have_offer) = true;
+            ESP_LOGI("hb", "firmware %s offered, %u bytes%s", offer.version.c_str(),
+                     (unsigned) offer.size, offer.force ? ", forced" : "");
+            return;
+          }
+
+          if (r.kind == tb::JOB_OTA) {
+            id(fw_installing) = false;
+            id(fw_pct_shown) = -1;
+            if (r.status == 200) {
+              hb::g_host.set_notice("Updating firmware 100%");
+              id(fw_result_body) = std::string("{\"version\":\"") + r.tag + "\",\"ok\":true}";
+              // Reboot once the backend has been told, or after ten seconds either way.
+              id(fw_reboot_at) = millis() + 10000;
+              ESP_LOGI("hb", "firmware %s installed, restarting", r.tag.c_str());
+            } else {
+              hb::g_host.set_notice("");
+              id(fw_result_body) = std::string("{\"version\":\"") + r.tag +
+                                   "\",\"ok\":false,\"error\":\"" + r.err + "\"}";
+              ESP_LOGW("hb", "firmware %s failed: %s", r.tag.c_str(), r.err.c_str());
+            }
+            return;
+          }
+
+          if (r.kind == tb::JOB_FWRESULT) {
+            if (id(fw_reboot_at)) {
+              id(fw_reboot_at) = 0;
+              ESP_LOGI("hb", "restarting into the new firmware");
+              App.safe_reboot();
+            }
             return;
           }
 
@@ -524,6 +698,8 @@ script:
               hb::g_host.set_status("Paired, fetching the board...");
             } else {
               id(next_poll_at) = millis() + poll * 1000UL;
+              // An answer while unpaired proves the boot as well as a document does.
+              id(confirm_boot).execute();
               // The code lasts 15 minutes; ask for a fresh one once it has run out.
               if (id(pair_expires_at) && (int32_t) (millis() - id(pair_expires_at)) >= 0) {
                 id(pair_code).clear();
@@ -563,6 +739,7 @@ script:
           }
           if (!r.etag.empty()) id(screen_etag) = r.etag;
           hb::g_host.set_document(doc);
+          id(confirm_boot).execute();   // a rendered document is what a good boot means here
           // Display settings ride along with the document; a missing block means full brightness.
           id(day_brightness) = doc.settings.brightness;
           id(night_on) = doc.settings.night.enabled;
@@ -591,6 +768,8 @@ interval:
       - lambda: |-
           if (!wifi::global_wifi_component->is_connected()) return;
           if (id(set_step) || id(detail_until) || tb::g_fetcher.busy()) return;
+          // An install owns the fetch task until it has reported and restarted.
+          if (id(fw_installing) || id(fw_reboot_at) || !id(fw_result_body).empty()) return;
           // Queued work is submitted by poll_fetcher, but only while claimed: don't let it
           // stall the pairing poll if a station was changed before the device was claimed.
           if (id(claimed) && (!id(pending_settings).empty() || !id(pending_detail).empty())) return;
@@ -622,6 +801,24 @@ interval:
           if (id(detail_until) && millis() > id(detail_until)) {
             id(detail_until) = 0;
             id(lv).show_page(0, LV_SCR_LOAD_ANIM_NONE, 0);
+          }
+          // Download progress is published by the fetch task and picked up here, the same way
+          // results are, so nothing on the main loop ever blocks on the install.
+          if (id(fw_installing)) {
+            int pct = tb::g_ota_pct.load();
+            if (pct >= 0 && pct != id(fw_pct_shown)) {
+              id(fw_pct_shown) = pct;
+              hb::g_host.set_notice("Updating firmware " + std::to_string(pct) + "%");
+            }
+          }
+          if (id(fw_reboot_at) && (int32_t) (millis() - id(fw_reboot_at)) >= 0) {
+            id(fw_reboot_at) = 0;
+            ESP_LOGI("hb", "restarting into the new firmware");
+            App.safe_reboot();
+          }
+          if (id(fw_notice_until) && (int32_t) (millis() - id(fw_notice_until)) >= 0) {
+            id(fw_notice_until) = 0;
+            hb::g_host.set_notice("");
           }
           if (id(scan_at) && millis() > id(scan_at)) {
             id(scan_at) = 0;

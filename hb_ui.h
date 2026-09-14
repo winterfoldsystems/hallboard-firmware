@@ -359,12 +359,27 @@ class ClockView : public PageView {
     return std::string(DAYS[dow]) + " " + std::to_string((int) now.day_of_month) + " " + MONTHS[mon];
   }
 
-  void set_weather(const std::string &line) { lv_label_set_text(weather_, line.c_str()); }
+  void set_weather(const std::string &line) {
+    weather_text_ = line;
+    refresh_line_();
+  }
+  // A firmware notice ("Updating firmware 12%", "Updated to 1.3.0") takes the weather line for as
+  // long as it is set, then hands it back. Nothing else interrupts the clock.
+  void set_notice(const std::string &msg) {
+    if (notice_ == msg) return;
+    notice_ = msg;
+    refresh_line_();
+  }
   void set_status(const std::string &msg) override {}  // the clock page stays a clock
 
  private:
+  void refresh_line_() {
+    lv_label_set_text(weather_, notice_.empty() ? weather_text_.c_str() : notice_.c_str());
+    lv_obj_set_style_text_color(weather_, lv_color_hex(notice_.empty() ? COL_AMBER : COL_WHITE), 0);
+  }
+
   lv_obj_t *time_ = nullptr, *date_ = nullptr, *weather_ = nullptr;
-  std::string last_hm_;
+  std::string last_hm_, weather_text_, notice_;
 };
 
 // ---- pairing: the only page besides the clock while the device is unclaimed. The QR encodes the
@@ -900,6 +915,13 @@ class PageHost {
 
   void set_status(const std::string &msg) {
     for (auto &v : views_) v->set_status(msg);
+  }
+
+  // Firmware update progress and the post-update confirmation, shown on the clock page only so a
+  // board or agenda keeps its own footer. An empty string clears it.
+  void set_notice(const std::string &msg) {
+    if (views_.empty()) return;
+    static_cast<ClockView *>(views_[0].get())->set_notice(msg);
   }
 
   size_t current() const { return cur_; }
