@@ -763,6 +763,10 @@ class PageHost {
     host_ = mk_obj(content_root, 0, 0, 480, 480);
     lv_obj_set_style_bg_color(host_, lv_color_hex(COL_BG), 0);
     lv_obj_set_style_bg_opa(host_, LV_OPA_COVER, 0);
+    // mk_obj strips CLICKABLE, but the indev hit-test only finds clickable objects: without
+    // this flag a drag lands on the screen behind the host and neither scrolling nor
+    // gestures ever reach it. The views themselves stay non-clickable so touches fall through.
+    lv_obj_add_flag(host_, LV_OBJ_FLAG_CLICKABLE);
 #if HB_CAROUSEL
     lv_obj_add_flag(host_, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(host_, LV_OBJ_FLAG_SCROLL_ONE);
