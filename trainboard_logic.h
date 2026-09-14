@@ -8,11 +8,13 @@
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
+#include <cctype>
 #include <ctime>
 #include <algorithm>
 #include "esphome/components/json/json_util.h"
 #include "esphome/core/helpers.h"
 #include "esphome/core/log.h"
+#include "hb_ui.h"
 #include "stations.h"
 #ifdef USE_WIFI
 #include <strings.h>
@@ -28,23 +30,8 @@
 
 namespace tb {
 
-// One row of a board page. `uid` is the document's service id, echoed back to
-// GET /v1/device/service/<id> on a long press.
-struct Row { std::string time, dest, plat, status, colour, uid, expected; };
-// One board page. `asof` is the provider timestamp the backend built it from (unix seconds) and
-// `stale` is set when the backend is serving its last good payload past the module's limit.
-struct Board { std::string header; std::vector<Row> rows; uint32_t asof = 0; bool stale = false; };
-
-// The two board pages of the last document (kept here so lambdas can use them without ESPHome
-// globals, which are declared before this header is included).
-inline Board g_cache[2];
-
-// The agenda page of the last document: one item per event occurrence, already sorted.
-struct CalItem { std::string d, w, t, u, s, l; bool all_day = false; };
-inline std::vector<CalItem> g_cal;
-inline std::string g_cal_name;
-inline uint32_t g_cal_asof = 0;
-inline bool g_cal_stale = false;
+// The page model lives in hb_ui.h: parse_screen turns a document into an hb::Document and the
+// views in hb_ui.h render it. Nothing here keeps a copy of the screen.
 
 // Firmware version, sent as X-Firmware on every request. Set from the YAML substitution on boot.
 inline std::string g_fw;
@@ -171,35 +158,35 @@ template<typename T> inline uint32_t juint(T v) { return v.template as<uint32_t>
 template<typename T> inline bool jbool(T v) { return v.template as<bool>(); }
 
 // ---------------------------------------------------------------- screen document (docs/screen-document.md)
-// What the last parse found, so the caller knows which pages the document actually carried.
-struct ScreenInfo { bool board_seen[2] = {false, false}; bool cal_seen = false; int pages = 0; };
-
-// Copies the first two "board" pages into g_cache[0]/[1] and the first "agenda" page into g_cal.
-// Other page types and unknown fields are ignored, as the contract requires.
-inline bool parse_screen(const std::string &body, ScreenInfo &info) {
+// Parses a document into an hb::Document. Unknown page types and unknown fields are ignored, as
+// the contract requires, and every list is capped: 8 pages, 5 board rows, 60 events, 8 generic
+// rows, with every string truncated by jstr. A malformed document cannot grow the heap.
+inline bool parse_screen(const std::string &body, hb::Document &out) {
   JsonDocument doc = esphome::json::parse_json(body);
   if (doc.isNull()) return false;
   JsonObject root = doc.as<JsonObject>();
   if (juint(root["v"]) != 1) return false;
   if (!root["pages"].is<JsonArray>()) return false;
 
-  const size_t MAX_PAGES = 8, MAX_ROWS = 5, MAX_EVENTS = 64;
-  int board = 0;
+  const size_t MAX_PAGES = 8, MAX_ROWS = 5, MAX_EVENTS = 60, MAX_GROWS = 8;
+  out = hb::Document();
+  out.gen = juint(root["gen"]);
+  out.tz = jstr(root["tz"], 40);
+
   JsonArray pages = root["pages"].as<JsonArray>();
   for (JsonObject pg : pages) {
-    if ((size_t) info.pages >= MAX_PAGES) break;
-    info.pages++;
+    if (out.pages.size() >= MAX_PAGES) break;
     const char *type = pg["type"].as<const char *>();
     if (!type) continue;
-    if (!strcmp(type, "board") && board < 2) {
-      Board nb;
-      nb.header = jstr(pg["title"], 40);
-      nb.asof = juint(pg["asof"]);
-      nb.stale = jbool(pg["stale"]);
+    hb::Page p;
+    if (!strcmp(type, "board")) {
+      p.type = 'b';
+      p.title = jstr(pg["title"], 40);
+      p.mode = jstr(pg["mode"], 4);
       JsonArray rows = pg["rows"].as<JsonArray>();
       for (JsonObject rw : rows) {
-        if (nb.rows.size() >= MAX_ROWS) break;
-        Row r;
+        if (p.rows.size() >= MAX_ROWS) break;
+        hb::BoardRow r;
         r.time = jstr(rw["t"], 8);
         r.dest = jstr(rw["d"], 32);
         r.plat = jstr(rw["p"], 4);
@@ -207,17 +194,16 @@ inline bool parse_screen(const std::string &body, ScreenInfo &info) {
         r.colour = jstr(rw["c"], 1);
         r.expected = jstr(rw["e"], 8);
         r.uid = jstr(rw["id"], 48);
-        nb.rows.push_back(r);
+        p.rows.push_back(r);
       }
-      g_cache[board] = nb;
-      info.board_seen[board] = true;
-      board++;
-    } else if (!strcmp(type, "agenda") && !info.cal_seen) {
-      std::vector<CalItem> items;
+    } else if (!strcmp(type, "agenda")) {
+      p.type = 'a';
+      p.title = jstr(pg["cal"], 24);
+      if (p.title.empty()) p.title = "Calendar";
       JsonArray events = pg["e"].as<JsonArray>();
       for (JsonObject e : events) {
-        if (items.size() >= MAX_EVENTS) break;
-        CalItem it;
+        if (p.events.size() >= MAX_EVENTS) break;
+        hb::AgendaEvent it;
         it.d = jstr(e["d"], 8);
         it.w = jstr(e["w"], 24);
         if (it.d.empty() || it.w.empty()) continue;
@@ -226,19 +212,52 @@ inline bool parse_screen(const std::string &body, ScreenInfo &info) {
         it.s = jstr(e["s"], 64);
         it.l = jstr(e["l"], 48);
         it.all_day = juint(e["a"]) == 1;
-        items.push_back(it);
+        p.events.push_back(it);
       }
-      g_cal = items;
-      g_cal_name = jstr(pg["cal"], 24);
-      if (g_cal_name.empty()) g_cal_name = "Calendar";
-      g_cal_asof = juint(pg["asof"]);
-      g_cal_stale = jbool(pg["stale"]);
-      info.cal_seen = true;
+    } else if (!strcmp(type, "generic")) {
+      p.type = 'g';
+      p.title = jstr(pg["title"], 40);
+      p.module = jstr(pg["module"], 24);
+      JsonArray rows = pg["rows"].as<JsonArray>();
+      for (JsonObject rw : rows) {
+        if (p.grows.size() >= MAX_GROWS) break;
+        hb::GenericRow r;
+        r.icon = jstr(rw["i"], 12);
+        r.value = jstr(rw["v"], 8);
+        r.a = jstr(rw["a"], 40);
+        r.b = jstr(rw["b"], 64);
+        p.grows.push_back(r);
+      }
+    } else {
+      continue;   // a page type this firmware does not know is skipped, not an error
+    }
+    p.id = jstr(pg["id"], 24);
+    if (p.id.empty()) p.id = std::string(1, p.type) + std::to_string(out.pages.size());
+    p.asof = juint(pg["asof"]);
+    p.stale = jbool(pg["stale"]);
+    out.pages.push_back(std::move(p));
+  }
+
+  // Display settings. Absent or out of range means full brightness and no night window.
+  JsonObject st = root["settings"].as<JsonObject>();
+  if (!st.isNull()) {
+    if (st["brightness"].is<int>()) {
+      int b = st["brightness"].as<int>();
+      if (b >= 0 && b <= 100) out.settings.brightness = b;
+    }
+    JsonObject night = st["night"].as<JsonObject>();
+    if (!night.isNull()) {
+      int from = hb::hhmm_to_minutes(jstr(night["from"], 5));
+      int to = hb::hhmm_to_minutes(jstr(night["to"], 5));
+      if (from >= 0 && to >= 0 && from != to) {
+        out.settings.night.enabled = true;
+        out.settings.night.from = from;
+        out.settings.night.to = to;
+        int nb = night["brightness"].is<int>() ? night["brightness"].as<int>() : 20;
+        out.settings.night.brightness = (nb >= 0 && nb <= 100) ? nb : 20;
+      }
     }
   }
-  // Pages the document no longer carries stop being displayed.
-  for (int i = board; i < 2; i++) g_cache[i] = Board();
-  if (!info.cal_seen) { g_cal.clear(); g_cal_name.clear(); g_cal_asof = 0; g_cal_stale = false; }
   return true;
 }
 
@@ -254,7 +273,7 @@ inline bool parse_pair(const std::string &body, bool &claimed, std::string &code
   uint32_t e = juint(root["expires_in"]);
   expires_in = (e >= 30 && e <= 3600) ? e : 900;
   uint32_t p = juint(root["poll"]);
-  poll = (p >= 5 && p <= 600) ? p : 10;
+  poll = (p >= 5 && p <= 1800) ? p : 10;
   return claimed || !code.empty();
 }
 
@@ -266,7 +285,7 @@ inline bool parse_config(const std::string &body, bool &claimed, uint32_t &poll)
   if (!root["claimed"].is<bool>()) return false;
   claimed = jbool(root["claimed"]);
   uint32_t p = juint(root["poll"]);
-  poll = (p >= 5 && p <= 600) ? p : (claimed ? 60 : 10);
+  poll = (p >= 5 && p <= 1800) ? p : (claimed ? 60 : 10);
   return true;
 }
 
@@ -355,6 +374,7 @@ struct Result {
   int status = -1;            // < 0: the request never completed
   std::string body, etag, tag;
   int board = 0;
+  uint32_t poll_after = 0;    // seconds from the Poll-After response header, 0 if absent
 };
 
 // A screen document is under 8 KB by contract; the cap is generous headroom, not a target.
@@ -406,14 +426,29 @@ class Fetcher {
       self->busy_ = false;
     }
   }
-  // esp_http_client_get_header() reads the REQUEST header list, so the response ETag has to be
-  // picked up from the header event instead. user_data points at the Result's etag string.
+  // esp_http_client_get_header() reads the REQUEST header list, so response headers have to be
+  // picked up from the header event instead. user_data points at the whole Result so both the
+  // ETag and the Poll-After cadence hint can be captured off the same callback.
   static esp_err_t on_event(esp_http_client_event_t *e) {
-    if (e->event_id == HTTP_EVENT_ON_HEADER && e->user_data && e->header_key && e->header_value &&
-        strcasecmp(e->header_key, "ETag") == 0) {
-      auto *s = static_cast<std::string *>(e->user_data);
-      s->assign(e->header_value);
-      if (s->size() > 96) s->resize(96);
+    if (e->event_id != HTTP_EVENT_ON_HEADER || !e->user_data || !e->header_key || !e->header_value) {
+      return ESP_OK;
+    }
+    auto *r = static_cast<Result *>(e->user_data);
+    if (strcasecmp(e->header_key, "ETag") == 0) {
+      r->etag.assign(e->header_value);
+      if (r->etag.size() > 96) r->etag.resize(96);
+    } else if (strcasecmp(e->header_key, "Poll-After") == 0) {
+      // Digits only, and only in the range the backend is documented to send; anything else
+      // is untrusted network input and is discarded rather than fed into the poll cadence.
+      const char *v = e->header_value;
+      bool digits = *v != '\0';
+      for (const char *p = v; *p; p++) {
+        if (!isdigit(static_cast<unsigned char>(*p))) { digits = false; break; }
+      }
+      if (digits) {
+        unsigned long n = strtoul(v, nullptr, 10);
+        if (n >= 15 && n <= 1800) r->poll_after = static_cast<uint32_t>(n);
+      }
     }
     return ESP_OK;
   }
@@ -430,7 +465,7 @@ class Fetcher {
     cfg.buffer_size = 4096;
     cfg.buffer_size_tx = 2048;
     cfg.event_handler = &Fetcher::on_event;
-    cfg.user_data = &r.etag;
+    cfg.user_data = &r;
     esp_http_client_handle_t c = esp_http_client_init(&cfg);
     if (!c) return r;
     if (!j.auth.empty()) esp_http_client_set_header(c, "Authorization", j.auth.c_str());

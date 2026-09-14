@@ -1,29 +1,32 @@
 # HallBoard wall display. The ESP32-S3 holds no provider credentials: on first boot it generates
-# its own 64-hex device secret, pairs with the HallBoard backend (a pairing code shows on screen
-# until a household claims it), then polls https://api.hallboard.co.uk for one screen document
-# that drives both train boards and the calendar. See docs/api-v1.md and docs/screen-document.md.
+# its own 64-hex device secret, pairs with the HallBoard backend (a pairing page with a QR code
+# shows on screen until a household claims it), then polls https://api.hallboard.co.uk for one
+# screen document. Every content page is built from that document at runtime by the templates in
+# hb_ui.h: a clock page first, then the household's boards, agenda and modules, all on one
+# horizontal carousel. See docs/api-v1.md and docs/screen-document.md.
 # No secrets file is needed to build.
 #
 # Wi-Fi is set up on the device: long-press the side button (0.7 to 6 s), pick a network, type the
 # password. Credentials are saved in flash. Holding the button 8 to 15 s is a factory reset: the
 # device secret is wiped and the board re-pairs.
-# Shared parts live in hardware.yaml / ui.yaml; logic helpers in trainboard_logic.h.
+# Shared parts live in hardware.yaml / ui.yaml; the pages in hb_ui.h, the logic in
+# trainboard_logic.h.
 
 substitutions:
   backend_base: "https://api.hallboard.co.uk"
-  fw_version: "1a.0"
+  fw_version: "1b.0"
 
 esphome:
   name: hallboard
   friendly_name: HallBoard
   includes:
+    - hb_ui.h
     - trainboard_logic.h
     - stations.h
   on_boot:
     priority: -100
     then:
       - lambda: |-
-          if (id(cur_board) > 1) id(cur_board) = 0;   // calendar page isn't restored across boots
           tb::g_fw = "${fw_version}";
           // First boot (or after a factory reset): mint the device secret. It is restored from
           // flash on every later boot and is never logged or shown.
@@ -33,25 +36,22 @@ esphome:
             id(screen_etag).clear();
             ESP_LOGI("hb", "generated a new device secret");
           }
-      - script.execute: render_current
+          if (id(cur_board) < 0) id(cur_board) = 0;
+          // Fonts the runtime pages draw with, the agenda's saved layout, and the way a widget
+          // posts an event back to this script. Then build the carousel, clock page first.
+          hb::g_fonts.clock = id(clock_font)->get_lv_font();
+          hb::g_fonts.code = id(pair_font)->get_lv_font();
+          hb::g_fonts.icon = id(icon_font)->get_lv_font();
+          hb::g_agenda_expanded = id(cal_expanded);
+          hb::g_event = [](const std::string &msg) { id(ev).execute(msg); };
+          hb::g_host.attach(id(content_page)->obj);
       - lambda: |-
           tb::g_fetcher.start();
-          // Swipe left/right between the boards and the calendar. Gestures bubble up to the page
-          // (LV_OBJ_FLAG_GESTURE_BUBBLE) and are only delivered to an object that doesn't bubble.
-          auto on_gesture = [](lv_event_t* e) {
-            lv_dir_t dir = lv_indev_get_gesture_dir(lv_indev_active());
-            if (dir == LV_DIR_LEFT) id(ev).execute("SWIPE|L");
-            else if (dir == LV_DIR_RIGHT) id(ev).execute("SWIPE|R");
-          };
-          for (lv_obj_t* pg : {id(main_page)->obj, id(calendar_page)->obj}) {
-            lv_obj_remove_flag(pg, LV_OBJ_FLAG_GESTURE_BUBBLE);
-            lv_obj_add_event_cb(pg, on_gesture, LV_EVENT_GESTURE, nullptr);
-          }
           wifi::global_wifi_component->set_keep_scan_results(true);
           if (wifi::global_wifi_component->has_sta()) {
-            lv_label_set_text(id(footer), "Connecting to Wi-Fi...");
+            hb::g_host.set_status("Connecting to Wi-Fi...");
           } else {
-            lv_label_set_text(id(footer), "No Wi-Fi configured • hold the side button");
+            hb::g_host.set_status("No Wi-Fi configured • hold the side button");
             id(ev).execute("BUTTONLONG");
           }
           // A factory reset is a very long hold; the 0.7 to 6 s band in hardware.yaml opens Wi-Fi
@@ -71,15 +71,15 @@ wifi:
         char ssid[wifi::SSID_BUFFER_SIZE];
         std::string msg = std::string("Connected to ") + wifi::global_wifi_component->wifi_ssid_to(ssid);
         lv_label_set_text(id(wifi_status), msg.c_str());
-        lv_label_set_text(id(footer), id(claimed) ? "Wi-Fi connected, fetching the board..."
-                                                  : "Wi-Fi connected, pairing...");
-        if (id(lv).get_current_page() == 3) id(lv).show_page(id(cur_board) == 2 ? 5 : 0, LV_SCR_LOAD_ANIM_NONE, 0);
+        hb::g_host.set_status(id(claimed) ? "Wi-Fi connected, fetching the board..."
+                                          : "Wi-Fi connected, pairing...");
+        if (id(lv).get_current_page() == 3) id(lv).show_page(0, LV_SCR_LOAD_ANIM_NONE, 0);
         // Pair (or poll the screen) on the next scheduler tick.
         id(backoff_ms) = 0;
         id(next_poll_at) = millis();
   on_disconnect:
     - lambda: |-
-        lv_label_set_text(id(footer), "Wi-Fi disconnected • hold the side button for Wi-Fi setup");
+        hb::g_host.set_status("Wi-Fi disconnected • hold the side button for Wi-Fi setup");
 
 improv_serial:
 
@@ -94,8 +94,8 @@ time:
     timezone: Europe/London
     on_time_sync:
       - lambda: |-
-          auto t = id(sntp_time).now();
-          if (t.is_valid()) lv_label_set_text(id(hdr_clock), t.strftime("%H:%M").c_str());
+          hb::g_host.tick(id(sntp_time).now());
+          id(apply_brightness).execute();
 
 # Requests are made by the background task in trainboard_logic.h (esp_http_client directly).
 # The component stays in the config so ESPHome enables the TLS certificate bundle.
@@ -115,27 +115,35 @@ globals:
   - {id: next_poll_at, type: uint32_t, initial_value: '0'}
   - {id: last_manual_refresh, type: uint32_t, initial_value: '0'}
   - {id: backoff_ms, type: uint32_t, initial_value: '0'}   # 0, then 30 s doubling to 5 min
+  # Station choice per board ordinal (0 and 1 are the first and second board pages in display
+  # order). Kept on the device so a header reads correctly before the new document arrives.
   - {id: board_from, type: 'int[2]', restore_value: true, initial_value: '{4755, 16814}'}   # FNC, WAT
   - {id: board_to,   type: 'int[2]', restore_value: true, initial_value: '{16814, 4755}'}   # WAT, FNC
-  - {id: cur_board, type: int, restore_value: true, initial_value: '0'}
   - {id: board_mode, type: 'int[2]', restore_value: true, initial_value: '{0, 1}'}   # 0 departures, 1 arrivals
+  - {id: cur_board, type: int, restore_value: true, initial_value: '0'}   # carousel index, restored across boots
+  - {id: page_restored, type: bool, initial_value: 'false'}
   - {id: detail_until, type: uint32_t, initial_value: '0'}
   - {id: scan_at, type: uint32_t, initial_value: '0'}
-  - {id: fetched_at0, type: uint32_t, initial_value: '0'}
   - {id: pending_detail, type: std::string}
   - {id: pending_settings, type: std::string}
-  - {id: fetched_at1, type: uint32_t, initial_value: '0'}
   - {id: pw_ssid, type: std::string}
   - {id: net_names, type: 'std::vector<std::string>'}
   - {id: set_step, type: int, initial_value: '0'}
+  - {id: set_board, type: int, initial_value: '0'}   # the board ordinal the picker is editing
   - {id: set_from, type: int, initial_value: '0'}
   - {id: matches, type: 'std::vector<int>'}
-  - {id: current_uids, type: 'std::vector<std::string>'}
-  - {id: cal_fetched_at, type: uint32_t, initial_value: '0'}
-  - {id: cal_expanded, type: bool, restore_value: true, initial_value: 'false'}   # calendar view: compact / two-line
+  - {id: cal_expanded, type: bool, restore_value: true, initial_value: 'false'}   # agenda: compact / two-line
+  # Display settings from the document (docs/screen-document.md).
+  - {id: day_brightness, type: int, initial_value: '100'}
+  - {id: night_on, type: bool, initial_value: 'false'}
+  - {id: night_from, type: int, initial_value: '0'}        # minutes past local midnight
+  - {id: night_to, type: int, initial_value: '0'}
+  - {id: night_brightness, type: int, initial_value: '20'}
+  - {id: night_lift_until, type: uint32_t, initial_value: '0'}
+  - {id: applied_brightness, type: int, initial_value: '-1'}
 
 script:
-  # ---- UI event dispatcher (mirrors the event loop in trainboard.py)
+  # ---- UI event dispatcher. hb_ui.h posts the same messages the fixed 1a pages posted.
   - id: ev
     parameters:
       msg: string
@@ -152,39 +160,46 @@ script:
             bool step1 = id(set_step) == 1;
             lv_obj_set_width(id(set_title), step1 ? 132 : 250);
             if (step1) lv_obj_remove_flag(id(mode_btn), LV_OBJ_FLAG_HIDDEN); else lv_obj_add_flag(id(mode_btn), LV_OBJ_FLAG_HIDDEN);
-            lv_label_set_text(id(mode_lbl), id(board_mode)[id(cur_board)] ? "Arrivals" : "Departures");
+            lv_label_set_text(id(mode_lbl), id(board_mode)[id(set_board)] ? "Arrivals" : "Departures");
             id(lv).show_page(2, LV_SCR_LOAD_ANIM_NONE, 0);
           };
-          auto step1_title = [&]() { return id(board_mode)[id(cur_board)] ? "Arrivals at" : "From station"; };
+          auto step1_title = [&]() { return id(board_mode)[id(set_board)] ? "Arrivals at" : "From station"; };
           // The only place the station choice changes. The packed codes stay on the device so the
           // header still reads correctly offline; the backend is told with PATCH /v1/device/settings,
           // queued here and submitted by poll_fetcher as soon as the fetch task is free.
           auto finish = [&](int to_code) {
-            id(board_from)[id(cur_board)] = id(set_from);
-            id(board_to)[id(cur_board)] = to_code;
+            int b = id(set_board);
+            id(board_from)[b] = id(set_from);
+            id(board_to)[b] = to_code;
             id(set_step) = 0;
-            tb::g_cache[id(cur_board)] = tb::Board();
-            if (id(cur_board) == 0) id(fetched_at0) = 0; else id(fetched_at1) = 0;
-            id(render_current).execute();
             std::string from = tb::unpack_code(id(set_from));
             std::string to = to_code ? tb::unpack_code(to_code) : "";
-            ESP_LOGI("hb", "board %d set to %s -> %s", id(cur_board) + 1,
+            bool arr = id(board_mode)[b] == 1;
+            std::string hdr = arr
+                ? tb::shorten(tb::station_name(from), 12) + " arrivals" + (to.empty() ? "" : " from " + tb::shorten(tb::station_name(to), 12))
+                : tb::shorten(tb::station_name(from), 14) + (to.empty() ? "" : "  to " + tb::shorten(tb::station_name(to), 14));
+            int idx = hb::g_host.board_index(b);
+            if (idx >= 0) {
+              auto* v = hb::g_host.view((size_t) idx);
+              if (v != nullptr && v->type() == 'b') static_cast<hb::BoardView*>(v)->set_pending(hdr);
+            }
+            ESP_LOGI("hb", "board %d set to %s -> %s", b + 1,
                      from.c_str(), to.empty() ? "any" : to.c_str());
             // Values are a 0/1 index, two A-Z codes and a fixed mode word: nothing needs escaping.
-            id(pending_settings) = std::string("{\"board\":") + std::to_string(id(cur_board)) +
+            id(pending_settings) = std::string("{\"board\":") + std::to_string(b) +
                                    ",\"from\":\"" + from + "\",\"to\":\"" + to + "\",\"mode\":\"" +
-                                   (id(board_mode)[id(cur_board)] ? "arr" : "dep") + "\"}";
+                                   (arr ? "arr" : "dep") + "\"}";
             id(lv).show_page(0, LV_SCR_LOAD_ANIM_NONE, 0);
+            if (idx >= 0) hb::g_host.show((size_t) idx, false);
             id(next_poll_at) = millis() + 2000;   // fallback if the PATCH never lands
           };
           // Tap to refresh, at most once every 15 seconds (docs/api-v1.md).
-          auto manual_refresh = [&](lv_obj_t* foot) {
+          auto manual_refresh = [&]() {
             if (id(last_manual_refresh) && millis() - id(last_manual_refresh) < 15000) return;
             id(last_manual_refresh) = millis();
             id(next_poll_at) = millis();
-            std::string f = lv_label_get_text(foot);
-            if (f.find(" • updating") == std::string::npos)
-              lv_label_set_text(foot, (f + " • updating").c_str());
+            auto* v = hb::g_host.current_view();
+            if (v != nullptr) v->set_footer_suffix(" • updating");
           };
 
           lv_obj_t* nb[] = {id(net0), id(net1), id(net2), id(net3), id(net4), id(net5), id(net6)};
@@ -201,18 +216,21 @@ script:
 
           if (msg == "FACTORYRESET") {
             id(factory_reset).execute();
-          } else if (msg == "BUTTON" && id(cur_board) == 2) {
-            // on the calendar the button toggles compact / expanded view
-            id(cal_expanded) = !id(cal_expanded);
-            id(render_calendar).execute();
-            lv_obj_scroll_to_y(id(cal_list), 0, LV_ANIM_OFF);
+          } else if (msg == "BUTTON" && hb::g_host.current_type() == 'a') {
+            // on the agenda the button toggles compact / expanded view
+            hb::g_agenda_expanded = !hb::g_agenda_expanded;
+            id(cal_expanded) = hb::g_agenda_expanded;
+            auto* av = hb::g_host.current_agenda();
+            if (av != nullptr) { av->render(); av->scroll_top(); }
           } else if (msg == "BUTTON") {
             id(detail_until) = 0;
+            int ord = hb::g_host.board_ordinal(hb::g_host.current());
+            id(set_board) = ord >= 0 ? ord : 0;
             id(set_step) = 1;
             open_settings(step1_title());
           } else if (msg == "MODE" && id(set_step) == 1) {
-            id(board_mode)[id(cur_board)] = id(board_mode)[id(cur_board)] ? 0 : 1;
-            lv_label_set_text(id(mode_lbl), id(board_mode)[id(cur_board)] ? "Arrivals" : "Departures");
+            id(board_mode)[id(set_board)] = id(board_mode)[id(set_board)] ? 0 : 1;
+            lv_label_set_text(id(mode_lbl), id(board_mode)[id(set_board)] ? "Arrivals" : "Departures");
             lv_label_set_text(id(set_title), step1_title());
           } else if (msg == "BUTTONLONG" || msg == "WIFISCAN") {
             id(detail_until) = 0;
@@ -232,7 +250,7 @@ script:
             wifi::global_wifi_component->save_wifi_sta(id(pw_ssid), pw);
             lv_textarea_set_text(id(pw_ta), "");
             lv_label_set_text(id(wifi_status), ("Connecting to " + id(pw_ssid) + "...").c_str());
-            lv_label_set_text(id(footer), ("Connecting to " + id(pw_ssid) + "...").c_str());
+            hb::g_host.set_status("Connecting to " + id(pw_ssid) + "...");
             id(lv).show_page(3, LV_SCR_LOAD_ANIM_NONE, 0);
           } else if (starts("Q|") && id(set_step)) {
             id(matches) = tb::search_stations(msg.substr(2), 4);
@@ -254,7 +272,7 @@ script:
             if (id(set_step) == 1) {
               id(set_from) = code;
               id(set_step) = 2;
-              bool arr = id(board_mode)[id(cur_board)];
+              bool arr = id(board_mode)[id(set_board)];
               open_settings(((arr ? "From (arrivals at " : "To (from ") + tb::shorten(st.name, 12) + ")").c_str());
             } else {
               finish(code);
@@ -264,134 +282,65 @@ script:
           } else if (msg == "CANCEL") {
             id(set_step) = 0;
             lv_textarea_set_text(id(pw_ta), "");
-            id(lv).show_page(id(cur_board) == 2 ? 5 : 0, LV_SCR_LOAD_ANIM_NONE, 0);
+            id(lv).show_page(0, LV_SCR_LOAD_ANIM_NONE, 0);
           } else if (msg == "TOUCH" && id(set_step)) {
             // settings page: taps are handled by its own widgets
           } else if (msg == "TOUCH" && id(detail_until)) {
             id(detail_until) = 0;
             id(lv).show_page(0, LV_SCR_LOAD_ANIM_NONE, 0);
           } else if (starts("SWIPE|") && !id(set_step)) {
-            bool left = msg == "SWIPE|L";
+            // Only reached with HB_CAROUSEL 0: with the carousel, LVGL scrolls the pages itself.
             id(detail_until) = 0;
-            id(cur_board) = (id(cur_board) + (left ? 1 : 2)) % 3;   // board 1 <-> board 2 <-> calendar, wrapping
-            auto anim = left ? LV_SCR_LOAD_ANIM_MOVE_LEFT : LV_SCR_LOAD_ANIM_MOVE_RIGHT;
-            if (id(cur_board) == 2) {
-              id(render_calendar).execute();   // cached; refreshed every 10 min in the background
-              lv_obj_scroll_to_y(id(cal_list), 0, LV_ANIM_OFF);
-              id(lv).show_page(5, anim, 150);
-              return;
-            }
-            id(render_current).execute();   // cached; the background interval keeps both boards fresh
-            id(lv).show_page(0, anim, 150);
-          } else if (msg == "TOUCH" && id(cur_board) == 2) {
-            manual_refresh(id(cal_footer));
+            hb::g_host.step(msg == "SWIPE|L" ? 1 : -1);
           } else if (msg == "TOUCH") {
-            // tap on a board: pull a fresh screen document (swipe changes page)
-            manual_refresh(id(footer));
+            // A tap pulls a fresh screen document and lifts the backlight out of night dimming.
+            id(night_lift_until) = millis() + 120000;
+            id(apply_brightness).execute();
+            manual_refresh();
           } else if (starts("LONG|") && !id(set_step)) {
-            int r = atoi(msg.c_str() + 5);
-            if (r < 0 || r >= (int) id(current_uids).size() || id(current_uids)[r].empty()) return;
+            auto* bv = hb::g_host.current_board();
+            if (bv == nullptr) return;
+            const std::string& uid = bv->uid_at(atoi(msg.c_str() + 5));
+            if (uid.empty()) return;
             lv_label_set_text(id(detail_hdr), "Loading...");
             lv_label_set_text(id(detail_body), "");
             id(lv).show_page(1, LV_SCR_LOAD_ANIM_NONE, 0);
             id(detail_until) = millis() + 60000;
-            id(fetch_detail).execute(id(current_uids)[r]);
+            id(fetch_detail).execute(uid);
           }
 
-  # ---- draw the cached board for the current selection (instant, no network)
-  - id: render_current
+  # ---- backlight: the document's day brightness, the night window, and the two-minute lift a
+  # touch during the night gives it. One second of transition either way.
+  - id: apply_brightness
     then:
       - lambda: |-
-          lv_obj_t* r_time[]   = {id(r0_time),   id(r1_time),   id(r2_time),   id(r3_time),   id(r4_time)};
-          lv_obj_t* r_dest[]   = {id(r0_dest),   id(r1_dest),   id(r2_dest),   id(r3_dest),   id(r4_dest)};
-          lv_obj_t* r_plat[]   = {id(r0_plat),   id(r1_plat),   id(r2_plat),   id(r3_plat),   id(r4_plat)};
-          lv_obj_t* r_status[] = {id(r0_status), id(r1_status), id(r2_status), id(r3_status), id(r4_status)};
-          lv_obj_t* r_exp[]    = {id(r0_exp),    id(r1_exp),    id(r2_exp),    id(r3_exp),    id(r4_exp)};
-          lv_obj_t* r_card[]   = {id(trow0),     id(trow1),     id(trow2),     id(trow3),     id(trow4)};
-          auto colour = [](const std::string& c) {
-            if (c == "G") return lv_color_hex(0x3DDC84);
-            if (c == "R") return lv_color_hex(0xFF4D4D);
-            if (c == "Y") return lv_color_hex(0xFFB000);
-            return lv_color_hex(0xC8C8C8);
-          };
-          int cur = id(cur_board);
-          tb::Board& b = tb::g_cache[cur];
-          std::string from = tb::unpack_code(id(board_from)[cur]);
-          std::string to = tb::unpack_code(id(board_to)[cur]);
-          std::string page = " • " + std::to_string(cur + 1) + "/3 swipe: next • button: edit";
-
-          // Not paired yet: the board area carries the pairing code instead of trains.
-          if (!id(claimed)) {
-            for (int i = 0; i < 5; i++) {
-              lv_label_set_text(r_time[i], ""); lv_label_set_text(r_dest[i], "");
-              lv_label_set_text(r_plat[i], ""); lv_label_set_text(r_status[i], "");
-              lv_label_set_text(r_exp[i], "");
-              lv_obj_add_flag(r_card[i], LV_OBJ_FLAG_HIDDEN);
-            }
-            id(current_uids).clear();
-            const std::string& code = id(pair_code);
-            if (code.size() >= 4) {
-              lv_label_set_text(id(hdr_station), ("Pair code " + code.substr(0, 3) + " " + code.substr(3)).c_str());
-              lv_label_set_text(id(footer), "Enter it at hallboard.co.uk");
-            } else {
-              lv_label_set_text(id(hdr_station), "HallBoard");
-              lv_label_set_text(id(footer), "Not paired");
-            }
-            return;
-          }
-
-          bool arrivals = id(board_mode)[cur] == 1;
-          std::string header = b.header.empty()
-              ? (arrivals ? tb::shorten(tb::station_name(from), 12) + " arrivals" + (to.empty() ? "" : " from " + tb::shorten(tb::station_name(to), 12))
-                          : tb::shorten(tb::station_name(from), 14) + (to.empty() ? "" : "  to " + tb::shorten(tb::station_name(to), 14)))
-              : b.header;
-          lv_label_set_text(id(hdr_station), header.c_str());
-          id(current_uids).clear();
-          for (int i = 0; i < 5; i++) {
-            if (i < (int) b.rows.size()) {
-              const tb::Row& r = b.rows[i];
-              lv_label_set_text(r_time[i], r.time.c_str());
-              lv_label_set_text(r_dest[i], r.dest.c_str());
-              lv_label_set_text(r_plat[i], r.plat.c_str());
-              // The status string arrives fully composed (delay, coaches, operator, and for an
-              // arrivals board the origin's booked and actual departure).
-              lv_label_set_text(r_status[i], r.status.c_str());
-              lv_obj_set_style_text_color(r_status[i], colour(r.colour), 0);
-              lv_obj_set_style_border_color(r_card[i], colour(r.colour == "W" ? "" : r.colour), 0);
-              lv_label_set_text(r_exp[i], r.expected.c_str());
-              lv_obj_set_style_text_color(r_exp[i], colour(r.colour), 0);
-              lv_obj_remove_flag(r_card[i], LV_OBJ_FLAG_HIDDEN);
-              id(current_uids).push_back(r.uid);
-            } else {
-              lv_label_set_text(r_time[i], ""); lv_label_set_text(r_dest[i], "");
-              lv_label_set_text(r_plat[i], ""); lv_label_set_text(r_status[i], "");
-              lv_label_set_text(r_exp[i], "");
-              lv_obj_add_flag(r_card[i], LV_OBJ_FLAG_HIDDEN);
+          int want = id(day_brightness);
+          if (id(night_on)) {
+            auto t = id(sntp_time).now();
+            if (t.is_valid()) {
+              int mins = t.hour * 60 + t.minute;
+              int from = id(night_from), to = id(night_to);
+              bool night = from < to ? (mins >= from && mins < to) : (mins >= from || mins < to);
+              if (night) want = id(night_brightness);
             }
           }
-          uint32_t fetched = cur == 0 ? id(fetched_at0) : id(fetched_at1);
-          if (b.rows.empty() && fetched) {
-            // asof is 0 only when the last document carried no page for this slot at all,
-            // which means the backend could not build it. Say so rather than "No trains".
-            bool missing = b.asof == 0;
-            lv_label_set_text(r_dest[0], missing ? "Board unavailable" : "No trains");
-            lv_label_set_text(r_status[0], missing ? "Not in the last update from the backend"
-                                          : (arrivals ? "None arriving in the next 2 hours" : "None due in the next 2 hours"));
-            lv_obj_set_style_text_color(r_status[0], lv_color_hex(0xC8C8C8), 0);
-            lv_obj_set_style_border_color(r_card[0], lv_color_hex(0x888888), 0);
-            lv_obj_remove_flag(r_card[0], LV_OBJ_FLAG_HIDDEN);
+          if (want != id(day_brightness) && id(night_lift_until) &&
+              (int32_t) (millis() - id(night_lift_until)) < 0)
+            want = id(day_brightness);
+          if (want < 0) want = 0;
+          if (want > 100) want = 100;
+          if (want == id(applied_brightness)) return;
+          id(applied_brightness) = want;
+          if (want == 0) {
+            auto c = id(backlight)->turn_off();
+            c.set_transition_length(1000);
+            c.perform();
+          } else {
+            auto c = id(backlight)->turn_on();
+            c.set_brightness(want / 100.0f);
+            c.set_transition_length(1000);
+            c.perform();
           }
-          // Footer time is the page's own asof from the document, rendered in local time.
-          std::string when;
-          if (b.asof) {
-            time_t t = (time_t) b.asof;
-            struct tm lt; localtime_r(&t, &lt);
-            char buf[8]; strftime(buf, sizeof buf, "%H:%M", &lt);
-            when = buf;
-          }
-          std::string foot = when.empty() ? "Loading..." + page
-                                          : "Updated " + when + (b.stale ? " (stale)" : "") + page;
-          lv_label_set_text(id(footer), foot.c_str());
 
   # ---- pairing: POST /v1/pair/begin (the one route with no Authorization header)
   - id: fetch_pair
@@ -440,93 +389,11 @@ script:
           id(pair_code).clear();
           id(pair_expires_at) = 0;
           ESP_LOGW("hb", "factory reset: device credential wiped, restarting");
-          lv_label_set_text(id(hdr_station), "Factory reset");
-          lv_label_set_text(id(footer), "Forgetting this device and restarting...");
+          hb::g_host.set_unpaired("");
+          hb::g_host.set_status("Forgetting this device and restarting...");
       - delay: 1500ms
       - lambda: |-
           App.safe_reboot();
-
-  # ---- draw the cached agenda (instant, no network)
-  - id: render_calendar
-    then:
-      - lambda: |-
-          lv_obj_t* cards[] = {id(card0), id(card1), id(card2), id(card3), id(card4), id(card5), id(card6), id(card7), id(card8), id(card9), id(card10), id(card11), id(card12), id(card13), id(card14), id(card15), id(card16), id(card17), id(card18), id(card19), id(card20), id(card21), id(card22), id(card23), id(card24), id(card25), id(card26), id(card27), id(card28), id(card29), id(card30), id(card31), id(card32), id(card33), id(card34), id(card35), id(card36), id(card37), id(card38), id(card39), id(card40), id(card41), id(card42), id(card43), id(card44), id(card45), id(card46), id(card47), id(card48), id(card49), id(card50), id(card51), id(card52), id(card53), id(card54), id(card55), id(card56), id(card57), id(card58), id(card59), id(card60), id(card61), id(card62), id(card63)};
-          lv_obj_t* ca[] = {id(c0_a), id(c1_a), id(c2_a), id(c3_a), id(c4_a), id(c5_a), id(c6_a), id(c7_a), id(c8_a), id(c9_a), id(c10_a), id(c11_a), id(c12_a), id(c13_a), id(c14_a), id(c15_a), id(c16_a), id(c17_a), id(c18_a), id(c19_a), id(c20_a), id(c21_a), id(c22_a), id(c23_a), id(c24_a), id(c25_a), id(c26_a), id(c27_a), id(c28_a), id(c29_a), id(c30_a), id(c31_a), id(c32_a), id(c33_a), id(c34_a), id(c35_a), id(c36_a), id(c37_a), id(c38_a), id(c39_a), id(c40_a), id(c41_a), id(c42_a), id(c43_a), id(c44_a), id(c45_a), id(c46_a), id(c47_a), id(c48_a), id(c49_a), id(c50_a), id(c51_a), id(c52_a), id(c53_a), id(c54_a), id(c55_a), id(c56_a), id(c57_a), id(c58_a), id(c59_a), id(c60_a), id(c61_a), id(c62_a), id(c63_a)};
-          lv_obj_t* cb[] = {id(c0_b), id(c1_b), id(c2_b), id(c3_b), id(c4_b), id(c5_b), id(c6_b), id(c7_b), id(c8_b), id(c9_b), id(c10_b), id(c11_b), id(c12_b), id(c13_b), id(c14_b), id(c15_b), id(c16_b), id(c17_b), id(c18_b), id(c19_b), id(c20_b), id(c21_b), id(c22_b), id(c23_b), id(c24_b), id(c25_b), id(c26_b), id(c27_b), id(c28_b), id(c29_b), id(c30_b), id(c31_b), id(c32_b), id(c33_b), id(c34_b), id(c35_b), id(c36_b), id(c37_b), id(c38_b), id(c39_b), id(c40_b), id(c41_b), id(c42_b), id(c43_b), id(c44_b), id(c45_b), id(c46_b), id(c47_b), id(c48_b), id(c49_b), id(c50_b), id(c51_b), id(c52_b), id(c53_b), id(c54_b), id(c55_b), id(c56_b), id(c57_b), id(c58_b), id(c59_b), id(c60_b), id(c61_b), id(c62_b), id(c63_b)};
-          lv_obj_t* cc[] = {id(c0_c), id(c1_c), id(c2_c), id(c3_c), id(c4_c), id(c5_c), id(c6_c), id(c7_c), id(c8_c), id(c9_c), id(c10_c), id(c11_c), id(c12_c), id(c13_c), id(c14_c), id(c15_c), id(c16_c), id(c17_c), id(c18_c), id(c19_c), id(c20_c), id(c21_c), id(c22_c), id(c23_c), id(c24_c), id(c25_c), id(c26_c), id(c27_c), id(c28_c), id(c29_c), id(c30_c), id(c31_c), id(c32_c), id(c33_c), id(c34_c), id(c35_c), id(c36_c), id(c37_c), id(c38_c), id(c39_c), id(c40_c), id(c41_c), id(c42_c), id(c43_c), id(c44_c), id(c45_c), id(c46_c), id(c47_c), id(c48_c), id(c49_c), id(c50_c), id(c51_c), id(c52_c), id(c53_c), id(c54_c), id(c55_c), id(c56_c), id(c57_c), id(c58_c), id(c59_c), id(c60_c), id(c61_c), id(c62_c), id(c63_c)};
-          lv_obj_t* dh[] = {id(d0_h), id(d1_h), id(d2_h), id(d3_h), id(d4_h), id(d5_h), id(d6_h), id(d7_h)};
-          lv_obj_t* dl[] = {id(d0_l), id(d1_l), id(d2_l), id(d3_l), id(d4_l), id(d5_l), id(d6_l), id(d7_l)};
-          const int N = 64, H = 8;
-          // Pools of widgets: hide everything, then lay out what is needed. Hidden objects don't extend
-          // the scroll area, so the list scrolls exactly as far as the content.
-          for (int i = 0; i < N; i++) lv_obj_add_flag(cards[i], LV_OBJ_FLAG_HIDDEN);
-          for (int i = 0; i < H; i++) { lv_obj_add_flag(dh[i], LV_OBJ_FLAG_HIDDEN); lv_obj_add_flag(dl[i], LV_OBJ_FLAG_HIDDEN); }
-          auto label = [](lv_obj_t* o, int x, int y, int w, const std::string& txt) {
-            lv_obj_set_pos(o, x, y);
-            lv_obj_set_width(o, w);
-            lv_label_set_text(o, txt.c_str());
-            if (txt.empty()) lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN); else lv_obj_remove_flag(o, LV_OBJ_FLAG_HIDDEN);
-          };
-          const bool expanded = id(cal_expanded);
-          const int CARD_H = expanded ? 64 : 40, GAP = 6, HEAD_GAP = 14;
-          lv_label_set_text(id(cal_title), tb::g_cal_name.empty() ? "Calendar" : tb::g_cal_name.c_str());
-          auto now = id(sntp_time).now();
-          std::string today = now.is_valid() ? now.strftime("%Y%m%d") : "";
-          std::string nowhm = now.is_valid() ? now.strftime("%H:%M") : "";
-          int card = 0, head = 0, y = 16, shown = 0;   // start clear of the rule under the title
-          std::string last_day;
-          for (const auto& it : tb::g_cal) {
-            if (card >= N) break;
-            // hide today's timed events that have already ended
-            if (!it.all_day && it.d == today && !nowhm.empty() && it.u.size() == 5 && it.u <= nowhm) continue;
-            if (it.w != last_day) {
-              if (head >= H) break;
-              if (!last_day.empty()) y += HEAD_GAP - GAP;
-              std::string hd = tb::upper(it.w) + (it.d == today ? "   TODAY" : "");
-              lv_obj_set_style_text_color(dh[head], lv_color_hex(it.d == today ? 0xFFFFFF : 0xAAAAAA), 0);
-              label(dh[head], 14, y, 452, hd);
-              lv_obj_set_pos(dl[head], 14, y + 26);
-              lv_obj_remove_flag(dl[head], LV_OBJ_FLAG_HIDDEN);
-              head++; y += 36;
-              last_day = it.w;
-            }
-            bool has_end = !it.all_day && !it.u.empty() && it.u != it.t;
-            lv_obj_t* c = cards[card];
-            lv_obj_set_pos(c, 14, y);
-            lv_obj_set_height(c, CARD_H);
-            lv_obj_set_style_border_color(c, lv_color_hex(it.all_day ? 0x3DDC84 : 0xFFB000), 0);
-            lv_obj_remove_flag(c, LV_OBJ_FLAG_HIDDEN);
-            if (expanded) {
-              // line 1: "start - end" in amber, location right-aligned in grey; line 2: title
-              std::string range = it.all_day ? "All day" : (has_end ? it.t + " - " + it.u : it.t);
-              label(ca[card], 14, 6, 200, range);
-              label(cb[card], 224, 8, 214, it.l);
-              label(cc[card], 14, 34, 424, it.s);
-            } else {
-              // one line: start, title, end time right-aligned in grey
-              label(ca[card], 14, 8, 82, it.all_day ? "All day" : it.t);
-              std::string endtxt = has_end ? it.u : "";
-              int title_w = endtxt.empty() ? 336 : 336 - 90;
-              label(cc[card], 102, 8, title_w, it.s);
-              label(cb[card], 348, 10, 90, endtxt);
-            }
-            y += CARD_H + GAP;
-            card++; shown++;
-          }
-          if (shown == 0) {
-            lv_obj_set_style_text_color(dh[0], lv_color_hex(0xFFFFFF), 0);
-            label(dh[0], 14, 16, 452, id(cal_fetched_at) ? "Nothing in the next 7 days" : "Loading...");
-          }
-          std::string when;
-          if (tb::g_cal_asof) {
-            time_t t = (time_t) tb::g_cal_asof;
-            struct tm lt; localtime_r(&t, &lt);
-            char buf[8]; strftime(buf, sizeof buf, "%H:%M", &lt);
-            when = buf;
-          }
-          std::string foot = (when.empty() ? std::string("Loading...")
-                                           : "Updated " + when + (tb::g_cal_stale ? " (stale)" : "")) + " • 3/3 button: " + std::string(expanded ? "compact" : "expand") + " • swipe: trains";
-          lv_label_set_text(id(cal_footer), foot.c_str());
 
   # ---- calling points for one train (long press); queued if the fetcher is busy
   - id: fetch_detail
@@ -558,7 +425,6 @@ script:
               } else {
                 tb::Job j;
                 j.kind = tb::JOB_DETAIL;
-                j.board = id(cur_board);
                 j.url = "${backend_base}/v1/device/service/" + sid;
                 j.auth = std::string("Bearer ") + id(device_secret);
                 if (tb::g_fetcher.submit(j)) id(pending_detail).clear();
@@ -570,9 +436,6 @@ script:
           if (!tb::g_fetcher.poll(r)) return;
           auto now = id(sntp_time).now();
           std::string nowstr = now.is_valid() ? now.strftime("%H:%M") : "--:--";
-          int cur = id(cur_board);
-          std::string page = " • " + std::to_string(cur + 1) + "/3 swipe: next • button: edit";
-          bool board_visible = cur < 2 && id(lv).get_current_page() == 0;
           // Status codes and byte counts only: never the secret, the document, or the ETag.
           ESP_LOGI("hb", "job %d: HTTP %d, %u bytes", (int) r.kind, r.status, (unsigned) r.body.size());
 
@@ -588,9 +451,9 @@ script:
             id(pending_detail).clear();
             id(backoff_ms) = 0;
             id(next_poll_at) = millis();
-            if (id(cur_board) > 1) id(cur_board) = 0;
+            id(page_restored) = true;
             id(lv).show_page(0, LV_SCR_LOAD_ANIM_NONE, 0);
-            id(render_current).execute();
+            hb::g_host.set_unpaired("");
             return;
           }
 
@@ -610,13 +473,13 @@ script:
 
           if (r.status == 429) {
             id(next_poll_at) = millis() + 30000;
-            if (board_visible) lv_label_set_text(id(footer), ("Rate limited, retrying" + page).c_str());
+            hb::g_host.set_status("Rate limited, retrying");
             return;
           }
           if (r.status < 0 || r.status >= 500) {
             id(backoff_ms) = id(backoff_ms) ? std::min<uint32_t>(id(backoff_ms) * 2, 300000) : 30000;
             id(next_poll_at) = millis() + id(backoff_ms);
-            if (board_visible) lv_label_set_text(id(footer), ("Backend unreachable at " + nowstr + page).c_str());
+            hb::g_host.set_status("Backend unreachable at " + nowstr);
             return;
           }
           id(backoff_ms) = 0;
@@ -626,7 +489,7 @@ script:
             if (r.status != 200 || !tb::parse_pair(r.body, cl, code, expires, poll)) {
               ESP_LOGW("hb", "pair/begin failed: HTTP %d", r.status);
               id(next_poll_at) = millis() + 30000;
-              if (board_visible) lv_label_set_text(id(footer), ("Pairing failed at " + nowstr).c_str());
+              hb::g_host.set_status("Pairing failed at " + nowstr);
               return;
             }
             if (cl) {
@@ -640,10 +503,9 @@ script:
               id(pair_code) = code;
               id(pair_expires_at) = millis() + expires * 1000UL;
               id(next_poll_at) = millis() + poll * 1000UL;
-              if (id(cur_board) > 1) id(cur_board) = 0;
-              if (id(lv).get_current_page() == 5) id(lv).show_page(0, LV_SCR_LOAD_ANIM_NONE, 0);
+              id(page_restored) = true;
+              hb::g_host.set_unpaired(code);
             }
-            id(render_current).execute();
             return;
           }
 
@@ -658,8 +520,8 @@ script:
               id(claimed) = true;
               id(pair_code).clear();
               id(pair_expires_at) = 0;
-              id(next_poll_at) = millis();
-              lv_label_set_text(id(footer), "Paired, fetching the board...");
+              id(next_poll_at) = millis();   // fetch the screen document straight away
+              hb::g_host.set_status("Paired, fetching the board...");
             } else {
               id(next_poll_at) = millis() + poll * 1000UL;
               // The code lasts 15 minutes; ask for a fresh one once it has run out.
@@ -685,29 +547,36 @@ script:
 
           // JOB_SCREEN
           id(next_poll_at) = millis() + 60000;
-          auto mark_fetched = [&]() { id(fetched_at0) = millis(); id(fetched_at1) = millis(); id(cal_fetched_at) = millis(); };
-          if (r.status == 304) {   // unchanged: keep showing the last document
-            mark_fetched();
-            return;
-          }
+          if (r.status == 304) return;   // unchanged: keep showing the last document
           if (r.status != 200) {
-            if (board_visible) lv_label_set_text(id(footer), ("HTTP " + std::to_string(r.status) + " at " + nowstr + page).c_str());
+            hb::g_host.set_status("HTTP " + std::to_string(r.status) + " at " + nowstr);
             return;
           }
-          tb::ScreenInfo info;
-          if (!tb::parse_screen(r.body, info)) {
-            if (board_visible) lv_label_set_text(id(footer), ("Could not read the screen document at " + nowstr + page).c_str());
+          hb::Document doc;
+          if (!tb::parse_screen(r.body, doc)) {
+            hb::g_host.set_status("Could not read the screen document at " + nowstr);
             return;
           }
           if (!r.etag.empty()) id(screen_etag) = r.etag;
-          mark_fetched();
-          ESP_LOGI("hb", "screen document applied: %u bytes, %d pages, boards %d/%d, agenda %d",
-                   (unsigned) r.body.size(), info.pages, (int) info.board_seen[0], (int) info.board_seen[1], (int) info.cal_seen);
-          ESP_LOGI("hb", "heap internal free %u largest %u | psram free %u largest %u",
+          hb::g_host.set_document(doc);
+          // Display settings ride along with the document; a missing block means full brightness.
+          id(day_brightness) = doc.settings.brightness;
+          id(night_on) = doc.settings.night.enabled;
+          id(night_from) = doc.settings.night.from;
+          id(night_to) = doc.settings.night.to;
+          id(night_brightness) = doc.settings.night.brightness;
+          id(apply_brightness).execute();
+          // After a reboot the board comes back on the page it was left on.
+          if (!id(page_restored)) {
+            id(page_restored) = true;
+            hb::g_host.show((size_t) id(cur_board), false);
+          }
+          ESP_LOGI("hb", "screen document applied: %u bytes, %u pages, %u on screen",
+                   (unsigned) r.body.size(), (unsigned) doc.pages.size(), (unsigned) hb::g_host.count());
+          ESP_LOGI("hb", "heap internal free %u largest %u | psram free %u largest %u | lvgl pages %u",
                    (unsigned) heap_caps_get_free_size(MALLOC_CAP_INTERNAL), (unsigned) heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
-                   (unsigned) heap_caps_get_free_size(MALLOC_CAP_SPIRAM), (unsigned) heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
-          if (id(cur_board) == 2 && id(lv).get_current_page() == 5) id(render_calendar).execute();
-          else if (board_visible) id(render_current).execute();
+                   (unsigned) heap_caps_get_free_size(MALLOC_CAP_SPIRAM), (unsigned) heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM),
+                   (unsigned) hb::g_host.object_count());
 
 interval:
   # Backend scheduler. next_poll_at carries the whole cadence: 10 s while unclaimed (or whatever
@@ -730,14 +599,18 @@ interval:
           bool expired = id(pair_expires_at) && (int32_t) (millis() - id(pair_expires_at)) >= 0;
           if (id(pair_code).empty() || expired) id(fetch_pair).execute();
           else id(fetch_config).execute();
+  # Clock tick for the clock page and the page headers, and the carousel position so the board
+  # comes back on the same page after a reboot.
   - interval: 1s
     then:
       - lambda: |-
-          auto t = id(sntp_time).now();
-          if (t.is_valid()) {
-            lv_label_set_text(id(hdr_clock), t.strftime("%H:%M").c_str());
-            lv_label_set_text(id(cal_clock), t.strftime("%H:%M").c_str());
-          }
+          hb::g_host.tick(id(sntp_time).now());
+          if (id(page_restored) && (int) hb::g_host.current() != id(cur_board))
+            id(cur_board) = (int) hb::g_host.current();
+  # Night dimming: re-evaluate the window against local time once a minute.
+  - interval: 60s
+    then:
+      - script.execute: apply_brightness
   - interval: 100ms
     then:
       - script.execute: poll_fetcher
