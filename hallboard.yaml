@@ -371,8 +371,12 @@ script:
           }
           uint32_t fetched = cur == 0 ? id(fetched_at0) : id(fetched_at1);
           if (b.rows.empty() && fetched) {
-            lv_label_set_text(r_dest[0], "No trains");
-            lv_label_set_text(r_status[0], arrivals ? "None arriving in the next 2 hours" : "None due in the next 2 hours");
+            // asof is 0 only when the last document carried no page for this slot at all,
+            // which means the backend could not build it. Say so rather than "No trains".
+            bool missing = b.asof == 0;
+            lv_label_set_text(r_dest[0], missing ? "Board unavailable" : "No trains");
+            lv_label_set_text(r_status[0], missing ? "Not in the last update from the backend"
+                                          : (arrivals ? "None arriving in the next 2 hours" : "None due in the next 2 hours"));
             lv_obj_set_style_text_color(r_status[0], lv_color_hex(0xC8C8C8), 0);
             lv_obj_set_style_border_color(r_card[0], lv_color_hex(0x888888), 0);
             lv_obj_remove_flag(r_card[0], LV_OBJ_FLAG_HIDDEN);
