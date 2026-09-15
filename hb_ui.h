@@ -402,7 +402,7 @@ class PairingView : public PageView {
     code_ = mk_label(root_, 0, 300, 480, 0, font_code(), COL_AMBER, "");
     lv_obj_set_style_text_align(code_, LV_TEXT_ALIGN_CENTER, 0);
     hint_lbl_ = mk_label(root_, 14, 396, 452, 26, &lv_font_montserrat_20, COL_DIM,
-                         "Scan or enter this code at hallboard.co.uk");
+                         "Scan or enter this code at www.hallboard.co.uk");
     lv_obj_set_style_text_align(hint_lbl_, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(hint_lbl_, LV_LABEL_LONG_MODE_DOTS);
     wifi_ = mk_label(root_, 14, 430, 452, 24, &lv_font_montserrat_16, COL_FOOT, "");
@@ -430,11 +430,11 @@ class PairingView : public PageView {
     }
     // The code rides in the fragment: the portal reads it in the browser and it never
     // reaches a server log line.
-    std::string url = "https://hallboard.co.uk/pair#code=" + code;
+    std::string url = "https://www.hallboard.co.uk/pair#code=" + code;
     lv_qrcode_update(qr_, url.c_str(), (uint32_t) url.size());
     set_hidden(quiet_, false);
     lv_label_set_text(code_, (code.substr(0, 3) + " " + code.substr(3)).c_str());
-    lv_label_set_text(hint_lbl_, "Scan or enter this code at hallboard.co.uk");
+    lv_label_set_text(hint_lbl_, "Scan or enter this code at www.hallboard.co.uk");
   }
 
   void set_status(const std::string &msg) override { lv_label_set_text(wifi_, msg.c_str()); }
