@@ -603,7 +603,7 @@ class BootView {
       case S_WIFI:
         if (!started_) return begin_step_(0, "Connecting to Wi-Fi...");
         if (have_net_) {
-          finish_step_(0, "Connected");
+          finish_step_(0, "Wi-Fi connected");
           return advance_(S_CONTENT);
         }
         // Twenty seconds without a network and the household needs telling how to fix it. A
@@ -614,11 +614,11 @@ class BootView {
       case S_CONTENT:
         if (!started_) return begin_step_(1, "Downloading content...");
         if (unpaired_) {
-          finish_step_(1, "Complete");
+          finish_step_(1, "Content loaded");
           return advance_(S_PAIR);
         }
         if (have_doc_) {
-          finish_step_(1, "Complete");
+          finish_step_(1, "Content loaded");
           content_at_ = now;
           return advance_(S_TIME);
         }
@@ -626,7 +626,7 @@ class BootView {
       case S_TIME:
         if (!started_) return begin_step_(2, "Syncing time...");
         if (have_time_) {
-          finish_step_(2, "Synced");
+          finish_step_(2, "Time synced");
           return advance_(S_READY);
         }
         // SNTP is not worth waiting on: the clock page says "Waiting for time..." instead.
@@ -636,7 +636,7 @@ class BootView {
         }
         return;
       case S_READY:
-        if (!started_) return begin_step_(3, "Ready to use", true);
+        if (!started_) return begin_step_(3, "Ready to use", true, true);
         return start_fade_();
       case S_PAIR:
         if (!started_) return begin_step_(3, "Pair this board", true);
@@ -652,15 +652,22 @@ class BootView {
   static const uint32_t HOLD_MS = 600;
 
   // Each of these writes exactly one line and holds the next transition for 600 ms.
-  void begin_step_(int i, const char *text, bool done = false) {
-    lv_obj_set_style_text_color(steps_[i], lv_color_hex(done ? COL_WHITE : COL_DIM), 0);
-    lv_label_set_text(steps_[i], text);
+  // `ticked` marks a line as done-and-successful: it gets the LV_SYMBOL_OK glyph and green.
+  void begin_step_(int i, const char *text, bool done = false, bool ticked = false) {
+    lv_obj_set_style_text_color(steps_[i], lv_color_hex(ticked ? COL_GREEN : (done ? COL_WHITE : COL_DIM)), 0);
+    if (ticked) {
+      std::string s = std::string(LV_SYMBOL_OK) + " " + text;
+      lv_label_set_text(steps_[i], s.c_str());
+    } else {
+      lv_label_set_text(steps_[i], text);
+    }
     started_ = true;
     hold_until_ = last_now_ + HOLD_MS;
   }
   void finish_step_(int i, const char *text) {
-    lv_obj_set_style_text_color(steps_[i], lv_color_hex(COL_WHITE), 0);
-    lv_label_set_text(steps_[i], text);
+    lv_obj_set_style_text_color(steps_[i], lv_color_hex(COL_GREEN), 0);
+    std::string s = std::string(LV_SYMBOL_OK) + " " + text;
+    lv_label_set_text(steps_[i], s.c_str());
     hold_until_ = last_now_ + HOLD_MS;
   }
   void advance_(Step next) {
