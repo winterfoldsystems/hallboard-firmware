@@ -428,7 +428,9 @@ class PairingView : public PageView {
       lv_label_set_text(hint_lbl_, "Waiting for a pairing code...");
       return;
     }
-    std::string url = "https://hallboard.co.uk/pair?code=" + code;
+    // The code rides in the fragment: the portal reads it in the browser and it never
+    // reaches a server log line.
+    std::string url = "https://hallboard.co.uk/pair#code=" + code;
     lv_qrcode_update(qr_, url.c_str(), (uint32_t) url.size());
     set_hidden(quiet_, false);
     lv_label_set_text(code_, (code.substr(0, 3) + " " + code.substr(3)).c_str());
