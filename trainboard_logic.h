@@ -311,7 +311,8 @@ inline std::string url_token(const std::string &s) {
 // no credential-bearing or host-confusing URL can reach esp_http_client, and the port is dropped
 // so the host can be compared to the backend's name exactly.
 inline std::string url_host(const std::string &url) {
-  if (url.size() > 512 || url.rfind("https://", 0) != 0) return "";
+  // GitHub answers a release download with a signed redirect of about a thousand characters.
+  if (url.size() > 2048 || url.rfind("https://", 0) != 0) return "";
   size_t start = 8;
   size_t end = url.find_first_of("/?#", start);
   std::string hostport = url.substr(start, end == std::string::npos ? std::string::npos : end - start);
@@ -607,7 +608,7 @@ class Fetcher {
     auto *ctx = static_cast<OtaCtx *>(e->user_data);
     if (strcasecmp(e->header_key, "Location") == 0) {
       ctx->location.assign(e->header_value);
-      if (ctx->location.size() > 512) ctx->location.resize(512);
+      if (ctx->location.size() > 2048) ctx->location.resize(2048);
     }
     return ESP_OK;
   }
@@ -654,7 +655,8 @@ class Fetcher {
       cfg.timeout_ms = 30000;
       cfg.crt_bundle_attach = esp_crt_bundle_attach;
       cfg.buffer_size = 2048;
-      cfg.buffer_size_tx = 1024;
+      // The request line carries the redirected URL, so the send buffer must hold it.
+      cfg.buffer_size_tx = 3072;
       cfg.event_handler = &Fetcher::on_ota_event;
       cfg.user_data = &ctx;
       cfg.disable_auto_redirect = true;   // redirects are followed here, with the host re-checked
@@ -689,6 +691,7 @@ class Fetcher {
         continue;
       }
       if (status != 200) {
+        ESP_LOGW("hb", "firmware download answered HTTP %d at hop %d", status, hops);
         esp_http_client_close(c);
         esp_http_client_cleanup(c);
         err = "download";
