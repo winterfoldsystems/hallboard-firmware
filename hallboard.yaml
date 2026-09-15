@@ -20,7 +20,7 @@
 
 substitutions:
   backend_base: "https://api.hallboard.co.uk"
-  fw_version: "1.3.5"
+  fw_version: "1.3.6"
 
 esphome:
   name: hallboard
@@ -48,9 +48,20 @@ esphome:
           hb::g_fonts.clock = id(clock_font)->get_lv_font();
           hb::g_fonts.code = id(pair_font)->get_lv_font();
           hb::g_fonts.icon = id(icon_font)->get_lv_font();
+          hb::g_fonts.wordmark = id(wordmark_font)->get_lv_font();
           hb::g_agenda_expanded = id(cal_expanded);
           hb::g_event = [](const std::string &msg) { id(ev).execute(msg); };
-          hb::g_host.attach(id(content_page)->obj);
+          hb::g_host.attach(id(content_page)->obj, "${fw_version}");
+          // The backlight is off from power-on (hardware.yaml), because until LVGL has drawn once
+          // the RGB panel scans whatever happened to be in PSRAM. Draw the black boot overlay
+          // here, synchronously, and only then bring the light up.
+          lv_obj_invalidate(lv_screen_active());
+          lv_refr_now(nullptr);
+          id(applied_brightness) = 100;
+          auto bl = id(backlight)->turn_on();
+          bl.set_brightness(1.0f);
+          bl.set_transition_length(250);
+          bl.perform();
       - lambda: |-
           // Straight after an over-the-air update the bootloader leaves the new image pending
           // until the boot is confirmed. Say which version is running while that is true, for a
@@ -69,7 +80,7 @@ esphome:
           if (wifi::global_wifi_component->has_sta()) {
             hb::g_host.set_status("Connecting to Wi-Fi...");
           } else {
-            hb::g_host.set_status("No Wi-Fi configured • hold the side button");
+            hb::g_host.set_status("No Wi-Fi configured • hold the side button", true);
             id(ev).execute("BUTTONLONG");
           }
           // A factory reset is a very long hold; the 0.7 to 6 s band in hardware.yaml opens Wi-Fi
@@ -112,8 +123,10 @@ wifi:
   on_connect:
     - lambda: |-
         char ssid[wifi::SSID_BUFFER_SIZE];
-        std::string msg = std::string("Connected to ") + wifi::global_wifi_component->wifi_ssid_to(ssid);
+        std::string name = wifi::global_wifi_component->wifi_ssid_to(ssid);
+        std::string msg = "Connected to " + name;
         lv_label_set_text(id(wifi_status), msg.c_str());
+        hb::g_host.set_network(name);
         hb::g_host.set_status(id(claimed) ? "Wi-Fi connected, fetching the board..."
                                           : "Wi-Fi connected, pairing...");
         if (id(lv).get_current_page() == 3) id(lv).show_page(0, LV_SCR_LOAD_ANIM_NONE, 0);
@@ -122,7 +135,7 @@ wifi:
         id(next_poll_at) = millis();
   on_disconnect:
     - lambda: |-
-        hb::g_host.set_status("Wi-Fi disconnected • hold the side button for Wi-Fi setup");
+        hb::g_host.set_status("Wi-Fi disconnected • hold the side button for Wi-Fi setup", true);
 
 improv_serial:
 
@@ -158,6 +171,11 @@ globals:
   - {id: next_poll_at, type: uint32_t, initial_value: '0'}
   - {id: last_manual_refresh, type: uint32_t, initial_value: '0'}
   - {id: backoff_ms, type: uint32_t, initial_value: '0'}   # 0, then 30 s doubling to 5 min
+  # Local "HH:MM" of the first failure of the current outage, so the status line can say how long
+  # it has been going on. Cleared the moment a request succeeds.
+  - {id: outage_since, type: std::string}
+  # The POSIX TZ string last handed to the clock, so a document only changes it when it changes.
+  - {id: applied_tz, type: std::string}
   # Station choice per board ordinal (0 and 1 are the first and second board pages in display
   # order). Kept on the device so a header reads correctly before the new document arrives.
   - {id: board_from, type: 'int[2]', restore_value: true, initial_value: '{4755, 16814}'}   # FNC, WAT
@@ -559,7 +577,10 @@ script:
           tb::Result r;
           if (!tb::g_fetcher.poll(r)) return;
           auto now = id(sntp_time).now();
-          std::string nowstr = now.is_valid() ? now.strftime("%H:%M") : "--:--";
+          // Before SNTP has synced there is no time to quote, so the clause is simply left off:
+          // "at --:--" told nobody anything.
+          std::string nowstr = now.is_valid() ? now.strftime("%H:%M") : "";
+          std::string at = nowstr.empty() ? "" : " at " + nowstr;
           // Status codes and byte counts only: never the secret, the document, or the ETag.
           ESP_LOGI("hb", "job %d: HTTP %d, %u bytes", (int) r.kind, r.status, (unsigned) r.body.size());
 
@@ -629,6 +650,7 @@ script:
               ESP_LOGI("hb", "firmware %s installed, restarting", r.tag.c_str());
             } else {
               hb::g_host.set_notice("");
+              hb::g_host.set_status("Update failed (" + r.err + ")", true);
               id(fw_result_body) = std::string("{\"version\":\"") + r.tag +
                                    "\",\"ok\":false,\"error\":\"" + r.err + "\"}";
               ESP_LOGW("hb", "firmware %s failed: %s", r.tag.c_str(), r.err.c_str());
@@ -647,23 +669,31 @@ script:
 
           if (r.status == 429) {
             id(next_poll_at) = millis() + 30000;
-            hb::g_host.set_status("Rate limited, retrying");
+            hb::g_host.set_status("Rate limited, retrying", true);
             return;
           }
           if (r.status < 0 || r.status >= 500) {
-            id(backoff_ms) = id(backoff_ms) ? std::min<uint32_t>(id(backoff_ms) * 2, 300000) : 30000;
+            if (id(outage_since).empty() && !nowstr.empty()) id(outage_since) = nowstr;
+            // While the boot sequence is still up, retry in 5 s rather than 30 so the help line
+            // appears while somebody is still watching the screen.
+            uint32_t first = hb::g_host.booting() ? 5000 : 30000;
+            id(backoff_ms) = id(backoff_ms) ? std::min<uint32_t>(id(backoff_ms) * 2, 300000) : first;
             id(next_poll_at) = millis() + id(backoff_ms);
-            hb::g_host.set_status("Backend unreachable at " + nowstr);
+            std::string m = "Backend unreachable";
+            if (!id(outage_since).empty()) m += " since " + id(outage_since);
+            if (!r.err.empty()) m += " (" + r.err + ")";
+            hb::g_host.set_status(m, true);
             return;
           }
           id(backoff_ms) = 0;
+          id(outage_since).clear();
 
           if (r.kind == tb::JOB_PAIR) {
             bool cl = false; std::string code; uint32_t expires = 900, poll = 10;
             if (r.status != 200 || !tb::parse_pair(r.body, cl, code, expires, poll)) {
               ESP_LOGW("hb", "pair/begin failed: HTTP %d", r.status);
               id(next_poll_at) = millis() + 30000;
-              hb::g_host.set_status("Pairing failed at " + nowstr);
+              hb::g_host.set_status("Pairing failed" + at, true);
               return;
             }
             if (cl) {
@@ -729,17 +759,25 @@ script:
           id(next_poll_at) = millis() + next * 1000UL;
           if (r.status == 304) return;   // unchanged: keep showing the last document
           if (r.status != 200) {
-            hb::g_host.set_status("HTTP " + std::to_string(r.status) + " at " + nowstr);
+            hb::g_host.set_status("HTTP " + std::to_string(r.status) + at, true);
             return;
           }
           hb::Document doc;
           if (!tb::parse_screen(r.body, doc)) {
-            hb::g_host.set_status("Could not read the screen document at " + nowstr);
+            hb::g_host.set_status("Could not read the screen document" + at, true);
             return;
           }
           if (!r.etag.empty()) id(screen_etag) = r.etag;
           hb::g_host.set_document(doc);
           id(confirm_boot).execute();   // a rendered document is what a good boot means here
+          // The household's timezone, as the POSIX string the clock component wants. Applied
+          // before the brightness so the night window is judged against local time.
+          if (!doc.tzp.empty() && doc.tzp != id(applied_tz)) {
+            id(applied_tz) = doc.tzp;
+            id(sntp_time).set_timezone(doc.tzp);
+            ESP_LOGI("hb", "timezone applied from the document");
+            hb::g_host.tick(id(sntp_time).now());
+          }
           // Display settings ride along with the document; a missing block means full brightness.
           id(day_brightness) = doc.settings.brightness;
           id(night_on) = doc.settings.night.enabled;
@@ -796,6 +834,10 @@ interval:
       - script.execute: apply_brightness
   - interval: 100ms
     then:
+      # The boot sequence runs off this tick and goes first, so a status posted by poll_fetcher
+      # in the same pass is seen on the next one rather than being written over immediately.
+      - lambda: |-
+          hb::g_host.tick_fast(millis());
       - script.execute: poll_fetcher
       - lambda: |-
           if (id(detail_until) && millis() > id(detail_until)) {

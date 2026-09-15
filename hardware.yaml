@@ -36,7 +36,9 @@ light:
     id: backlight
     name: "Backlight"
     output: ledc_gpio45
-    restore_mode: ALWAYS_ON
+    # The panel stays dark from power-on: the RGB framebuffer holds whatever was in PSRAM until
+    # LVGL has drawn, and on_boot turns the backlight up once the boot overlay is on screen.
+    restore_mode: ALWAYS_OFF
 
 binary_sensor:
   - platform: gpio

@@ -176,6 +176,9 @@ inline bool parse_screen(const std::string &body, hb::Document &out) {
   out = hb::Document();
   out.gen = juint(root["gen"]);
   out.tz = jstr(root["tz"], 40);
+  // The POSIX form of the same zone, which is what the clock component wants. An older backend
+  // does not send it and an unparseable one is ignored downstream, so absent is fine.
+  out.tzp = jstr(root["tzp"], 64);
 
   JsonArray pages = root["pages"].as<JsonArray>();
   for (JsonObject pg : pages) {
@@ -245,6 +248,8 @@ inline bool parse_screen(const std::string &body, hb::Document &out) {
   // Display settings. Absent or out of range means full brightness and no night window.
   JsonObject st = root["settings"].as<JsonObject>();
   if (!st.isNull()) {
+    // The household's name for this board, for the boot support line. Absent on an older backend.
+    out.name = jstr(st["name"], 32);
     if (st["brightness"].is<int>()) {
       int b = st["brightness"].as<int>();
       if (b >= 0 && b <= 100) out.settings.brightness = b;
@@ -577,13 +582,25 @@ class Fetcher {
     esp_http_client_set_header(c, "Accept", "application/json");
     if (!j.body.empty()) esp_http_client_set_header(c, "Content-Type", "application/json");
     if (!j.inm.empty()) esp_http_client_set_header(c, "If-None-Match", j.inm.c_str());
-    if (esp_http_client_open(c, (int) j.body.size()) != ESP_OK) { esp_http_client_cleanup(c); return r; }
+    // A short code on each early exit, so a status line can say why the request never completed
+    // rather than only that it did not.
+    if (esp_http_client_open(c, (int) j.body.size()) != ESP_OK) {
+      r.err = "connect";
+      esp_http_client_cleanup(c);
+      return r;
+    }
     if (!j.body.empty() && esp_http_client_write(c, j.body.data(), (int) j.body.size()) < 0) {
+      r.err = "send";
       esp_http_client_close(c);
       esp_http_client_cleanup(c);
       return r;
     }
-    if (esp_http_client_fetch_headers(c) < 0) { esp_http_client_close(c); esp_http_client_cleanup(c); return r; }
+    if (esp_http_client_fetch_headers(c) < 0) {
+      r.err = "headers";
+      esp_http_client_close(c);
+      esp_http_client_cleanup(c);
+      return r;
+    }
     r.status = esp_http_client_get_status_code(c);
     // 304 carries no body and falls straight out of the read loop.
     char buf[2048];

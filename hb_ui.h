@@ -25,6 +25,7 @@
 
 #include <lvgl.h>
 #include "esphome/components/lvgl/lvgl_esphome.h"
+#include "esphome/core/log.h"
 #include "esphome/core/time.h"
 
 namespace hb {
@@ -74,7 +75,9 @@ struct Settings {
 
 struct Document {
   uint32_t gen = 0;
-  std::string tz;
+  std::string tz;    // the household's IANA zone, informational
+  std::string tzp;   // the same zone as a POSIX TZ string, which is what the clock wants
+  std::string name;  // the household's name for this board, shown on the boot support line
   std::vector<Page> pages;
   Settings settings;
 };
@@ -97,12 +100,16 @@ struct FontSet {
   const lv_font_t *clock = nullptr;  // 120 px digits for the clock page
   const lv_font_t *code = nullptr;   // 64 px for the pairing code
   const lv_font_t *icon = nullptr;   // 48 px Material Design Icons
+  const lv_font_t *wordmark = nullptr;  // 56 px for the boot wordmark
 };
 inline FontSet g_fonts;
 
 inline const lv_font_t *font_clock() { return g_fonts.clock != nullptr ? g_fonts.clock : &lv_font_montserrat_28; }
 inline const lv_font_t *font_code() { return g_fonts.code != nullptr ? g_fonts.code : &lv_font_montserrat_28; }
 inline const lv_font_t *font_icon() { return g_fonts.icon != nullptr ? g_fonts.icon : &lv_font_montserrat_28; }
+inline const lv_font_t *font_wordmark() {
+  return g_fonts.wordmark != nullptr ? g_fonts.wordmark : &lv_font_montserrat_28;
+}
 
 // The icon names the document may use, in the order docs/screen-document.md lists them, mapped to
 // Material Design Icons codepoints as UTF-8. An unknown name renders as nothing.
@@ -262,8 +269,10 @@ class PageView {
   virtual void apply(const Page &pg) {}
   virtual void tick(esphome::ESPTime now) {}
 
-  // A transient line (Wi-Fi, backend errors) shown where the page has room for it.
-  virtual void set_status(const std::string &msg) { set_footer_base(msg); }
+  // A transient line (Wi-Fi, backend errors) shown where the page has room for it. `problem` is
+  // true when the message is something support would want to see; the clock page shows only
+  // those, every other page keeps showing the lot in its footer as it always has.
+  virtual void set_status(const std::string &msg, bool problem) { set_footer_base(msg); }
 
   lv_obj_t *root() const { return root_; }
   const std::string &id() const { return id_; }
@@ -325,10 +334,20 @@ class PageView {
 class ClockView : public PageView {
  public:
   explicit ClockView(lv_obj_t *parent) : PageView(parent, "__clock", 'c') {
-    time_ = mk_label(root_, 0, 128, 480, 0, font_clock(), COL_WHITE, "--:--");
+    // The clock font holds digits, a colon, a space and a hyphen and nothing else, so the label
+    // starts empty rather than showing "--:--": four missing glyphs would draw as four boxes.
+    time_ = mk_label(root_, 0, 128, 480, 0, font_clock(), COL_WHITE, "");
     lv_obj_set_style_text_align(time_, LV_TEXT_ALIGN_CENTER, 0);
+    waiting_ = mk_label(root_, 0, 176, 480, 36, &lv_font_montserrat_24, COL_DIM, "Waiting for time...");
+    lv_obj_set_style_text_align(waiting_, LV_TEXT_ALIGN_CENTER, 0);
     date_ = mk_label(root_, 0, 296, 480, 36, &lv_font_montserrat_28, COL_DIM, "");
     lv_obj_set_style_text_align(date_, LV_TEXT_ALIGN_CENTER, 0);
+    // Only shown while something is wrong, and only for a problem status: the clock page is what
+    // the household looks at, so it stays a clock until support needs a clue.
+    problem_ = mk_label(root_, 14, 380, 452, 26, &lv_font_montserrat_20, COL_GREY, "");
+    lv_obj_set_style_text_align(problem_, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_long_mode(problem_, LV_LABEL_LONG_MODE_DOTS);
+    set_hidden(problem_, true);
     weather_ = mk_label(root_, 14, 424, 452, 28, &lv_font_montserrat_20, COL_AMBER, "");
     lv_obj_set_style_text_align(weather_, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(weather_, LV_LABEL_LONG_MODE_DOTS);
@@ -336,11 +355,13 @@ class ClockView : public PageView {
 
   void tick(esphome::ESPTime now) override {
     if (!now.is_valid()) {
-      lv_label_set_text(time_, "--:--");
+      lv_label_set_text(time_, "");
       lv_label_set_text(date_, "");
+      set_hidden(waiting_, false);
       last_hm_.clear();
       return;
     }
+    set_hidden(waiting_, true);
     if (g_nowhm != last_hm_) {
       last_hm_ = g_nowhm;
       lv_label_set_text(time_, last_hm_.c_str());
@@ -370,7 +391,21 @@ class ClockView : public PageView {
     notice_ = msg;
     refresh_line_();
   }
-  void set_status(const std::string &msg) override {}  // the clock page stays a clock
+  // Informational statuses are dropped: the clock page stays a clock. A problem is worth a small
+  // grey line, cleared by clear_problem() as soon as a document arrives.
+  void set_status(const std::string &msg, bool problem) override {
+    if (!problem) return;
+    if (problem_text_ == msg) return;
+    problem_text_ = msg;
+    lv_label_set_text(problem_, msg.c_str());
+    set_hidden(problem_, msg.empty());
+  }
+  void clear_problem() {
+    if (problem_text_.empty()) return;
+    problem_text_.clear();
+    lv_label_set_text(problem_, "");
+    set_hidden(problem_, true);
+  }
 
  private:
   void refresh_line_() {
@@ -378,8 +413,8 @@ class ClockView : public PageView {
     lv_obj_set_style_text_color(weather_, lv_color_hex(notice_.empty() ? COL_AMBER : COL_WHITE), 0);
   }
 
-  lv_obj_t *time_ = nullptr, *date_ = nullptr, *weather_ = nullptr;
-  std::string last_hm_, weather_text_, notice_;
+  lv_obj_t *time_ = nullptr, *waiting_ = nullptr, *date_ = nullptr, *problem_ = nullptr, *weather_ = nullptr;
+  std::string last_hm_, weather_text_, notice_, problem_text_;
 };
 
 // ---- pairing: the only page besides the clock while the device is unclaimed. The QR encodes the
@@ -437,11 +472,251 @@ class PairingView : public PageView {
     lv_label_set_text(hint_lbl_, "Scan or enter this code at www.hallboard.co.uk");
   }
 
-  void set_status(const std::string &msg) override { lv_label_set_text(wifi_, msg.c_str()); }
+  void set_status(const std::string &msg, bool problem) override { lv_label_set_text(wifi_, msg.c_str()); }
 
  private:
   lv_obj_t *quiet_ = nullptr, *qr_ = nullptr, *code_ = nullptr, *hint_lbl_ = nullptr, *wifi_ = nullptr;
   std::string code_shown_ = "\x01";  // never a valid code, so the first set_code always draws
+};
+
+// ---- boot: what the board shows from power-on until it is ready. Not a PageView and never in
+// views_: it is an opaque black overlay owned by PageHost that sits on top of the carousel, so
+// nothing behind it is visible while the screen settles, the wordmark rises, and the four steps
+// tick off in order. Deleted the tick after its fade completes, which puts the LVGL object count
+// back where it was.
+//
+// Every event only sets a flag; the state machine runs from the 100 ms tick and writes at most one
+// line per pass, each write holding the next transition for 600 ms. That is what makes the steps
+// readable when SNTP finishes before the fetch does, which on a warm boot it usually does.
+//
+// Strings here are ASCII plus the bullet U+2022, the only non-ASCII glyph the built-in Montserrat
+// bitmaps carry: no ellipsis, no em dash. Three dots is three dots.
+class BootView {
+ public:
+  BootView(lv_obj_t *parent, std::string fw) : fw_(std::move(fw)) {
+    root_ = mk_obj(parent, 0, 0, 480, 480);
+    lv_obj_set_style_bg_color(root_, lv_color_hex(COL_BG), 0);
+    lv_obj_set_style_bg_opa(root_, LV_OPA_COVER, 0);
+    // Swallow touches: nothing behind the overlay should react while it is up, and the gesture
+    // must not bubble to the host or a swipe would page the carousel underneath.
+    lv_obj_add_flag(root_, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(root_, LV_OBJ_FLAG_GESTURE_BUBBLE);
+
+    logo_ = make_logo_(root_);
+    notice_ = mk_label(root_, 14, 198, 452, 26, &lv_font_montserrat_20, COL_WHITE, "");
+    lv_obj_set_style_text_align(notice_, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_long_mode(notice_, LV_LABEL_LONG_MODE_DOTS);
+    for (int i = 0; i < STEPS; i++) {
+      steps_[i] = mk_label(root_, 14, 232 + 34 * i, 452, 30, &lv_font_montserrat_24, COL_DIM, "");
+      lv_obj_set_style_text_align(steps_[i], LV_TEXT_ALIGN_CENTER, 0);
+      lv_label_set_long_mode(steps_[i], LV_LABEL_LONG_MODE_DOTS);
+    }
+    help_ = mk_label(root_, 24, 372, 432, 54, &lv_font_montserrat_20, COL_AMBER, "");
+    lv_obj_set_style_text_align(help_, LV_TEXT_ALIGN_CENTER, 0);
+    detail_ = mk_label(root_, 14, 428, 452, 20, &lv_font_montserrat_16, COL_FOOT, "");
+    lv_obj_set_style_text_align(detail_, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_long_mode(detail_, LV_LABEL_LONG_MODE_DOTS);
+    support_ = mk_label(root_, 14, 452, 452, 20, &lv_font_montserrat_16, COL_FOOT, "");
+    lv_obj_set_style_text_align(support_, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_long_mode(support_, LV_LABEL_LONG_MODE_DOTS);
+    refresh_support_();
+    s_fade_done = false;
+  }
+  BootView(const BootView &) = delete;
+  BootView &operator=(const BootView &) = delete;
+  ~BootView() {
+    if (root_ != nullptr) lv_obj_delete(root_);
+  }
+
+  // The wordmark stands in for a real logo. One function, one place to replace it with an image.
+  static lv_obj_t *make_logo_(lv_obj_t *parent) {
+    lv_obj_t *l = mk_label(parent, 0, 136, 480, 0, font_wordmark(), COL_WHITE, "HallBoard");
+    lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_opa(l, LV_OPA_TRANSP, 0);
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, l);
+    lv_anim_set_duration(&a, 500);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+    lv_anim_set_exec_cb(&a, anim_opa_cb_);
+    lv_anim_set_values(&a, LV_OPA_TRANSP, LV_OPA_COVER);
+    lv_anim_start(&a);
+    lv_anim_set_exec_cb(&a, anim_y_cb_);
+    lv_anim_set_values(&a, 136, 120);
+    lv_anim_start(&a);
+    return l;
+  }
+
+  lv_obj_t *root() const { return root_; }
+  void raise() {
+    if (root_ != nullptr) lv_obj_move_foreground(root_);
+  }
+  // Set by the fade's completion callback; PageHost deletes us on the next tick.
+  bool finished() const { return s_fade_done; }
+
+  // ---- events. These only record what happened; the tick decides what is on screen.
+  void on_network(const std::string &ssid) {
+    have_net_ = true;
+    if (!ssid.empty() && ssid_ != ssid) {
+      ssid_ = ssid;
+      refresh_support_();
+    }
+  }
+  void on_document(const std::string &name) {
+    have_doc_ = true;
+    if (!name.empty() && name_ != name) {
+      name_ = name;
+      refresh_support_();
+    }
+  }
+  void on_unpaired(const std::string &code) {
+    have_doc_ = true;
+    unpaired_ = true;
+  }
+  void on_time_valid() { have_time_ = true; }
+  void set_notice(const std::string &msg) {
+    if (notice_text_ == msg) return;
+    notice_text_ = msg;
+    lv_label_set_text(notice_, msg.c_str());
+  }
+  void on_status(const std::string &msg, bool problem) {
+    status_ = msg;
+    if (!problem) return;
+    problems_++;
+    if (step_ <= S_WIFI) {
+      // Whatever the Wi-Fi trouble is, the status string already says what to do about it.
+      set_help_(msg);
+    } else if (problems_ >= 2) {
+      set_help_("Cannot reach hallboard.co.uk, retrying...");
+      set_detail_(msg);
+    }
+  }
+
+  // ---- the state machine, one text write per pass
+  void tick_fast(uint32_t now) {
+    if (root_ == nullptr || s_fade_done) return;
+    last_now_ = now;
+    if (t0_ == 0) t0_ = now;
+    if (step_ == S_FADING) return;
+    if ((int32_t) (now - hold_until_) < 0) return;
+    switch (step_) {
+      case S_WIFI:
+        if (!started_) return begin_step_(0, "Connecting to Wi-Fi...");
+        if (have_net_) {
+          finish_step_(0, "Connected");
+          return advance_(S_CONTENT);
+        }
+        // Twenty seconds without a network and the household needs telling how to fix it. A
+        // status string that already said so wins: it is more specific than this one.
+        if (help_text_.empty() && (int32_t) (now - t0_) > 20000)
+          set_help_("Still looking for Wi-Fi... hold the side button to choose a network");
+        return;
+      case S_CONTENT:
+        if (!started_) return begin_step_(1, "Downloading content...");
+        if (unpaired_) {
+          finish_step_(1, "Complete");
+          return advance_(S_PAIR);
+        }
+        if (have_doc_) {
+          finish_step_(1, "Complete");
+          content_at_ = now;
+          return advance_(S_TIME);
+        }
+        return;
+      case S_TIME:
+        if (!started_) return begin_step_(2, "Syncing time...");
+        if (have_time_) {
+          finish_step_(2, "Synced");
+          return advance_(S_READY);
+        }
+        // SNTP is not worth waiting on: the clock page says "Waiting for time..." instead.
+        if ((int32_t) (now - content_at_) > 30000) {
+          set_help_("Time not synced yet");
+          return advance_(S_READY);
+        }
+        return;
+      case S_READY:
+        if (!started_) return begin_step_(3, "Ready to use", true);
+        return start_fade_();
+      case S_PAIR:
+        if (!started_) return begin_step_(3, "Pair this board", true);
+        return start_fade_();
+      default:
+        return;
+    }
+  }
+
+ private:
+  enum Step { S_WIFI = 0, S_CONTENT, S_TIME, S_READY, S_PAIR, S_FADING };
+  static const int STEPS = 4;
+  static const uint32_t HOLD_MS = 600;
+
+  // Each of these writes exactly one line and holds the next transition for 600 ms.
+  void begin_step_(int i, const char *text, bool done = false) {
+    lv_obj_set_style_text_color(steps_[i], lv_color_hex(done ? COL_WHITE : COL_DIM), 0);
+    lv_label_set_text(steps_[i], text);
+    started_ = true;
+    hold_until_ = last_now_ + HOLD_MS;
+  }
+  void finish_step_(int i, const char *text) {
+    lv_obj_set_style_text_color(steps_[i], lv_color_hex(COL_WHITE), 0);
+    lv_label_set_text(steps_[i], text);
+    hold_until_ = last_now_ + HOLD_MS;
+  }
+  void advance_(Step next) {
+    step_ = next;
+    started_ = false;
+  }
+  void set_help_(const std::string &msg) {
+    if (help_text_ == msg) return;
+    help_text_ = msg;
+    lv_label_set_text(help_, msg.c_str());
+    hold_until_ = last_now_ + HOLD_MS;
+  }
+  void set_detail_(const std::string &msg) {
+    if (detail_text_ == msg) return;
+    detail_text_ = msg;
+    lv_label_set_text(detail_, msg.c_str());
+  }
+  // "v1.3.6 • Home Wi-Fi • Hallway", with only the parts that are known yet.
+  void refresh_support_() {
+    std::string s;
+    if (!fw_.empty()) s = "v" + fw_;
+    if (!ssid_.empty()) s += (s.empty() ? "" : " \xE2\x80\xA2 ") + ssid_;
+    if (!name_.empty()) s += (s.empty() ? "" : " \xE2\x80\xA2 ") + name_;
+    lv_label_set_text(support_, s.c_str());
+  }
+  // Opacity is an inherited style, so fading the root fades every child with it.
+  void start_fade_() {
+    step_ = S_FADING;
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, root_);
+    lv_anim_set_duration(&a, 400);
+    lv_anim_set_exec_cb(&a, anim_opa_cb_);
+    lv_anim_set_values(&a, LV_OPA_COVER, LV_OPA_TRANSP);
+    lv_anim_set_completed_cb(&a, fade_done_cb_);
+    lv_anim_start(&a);
+  }
+
+  static void anim_opa_cb_(void *var, int32_t v) {
+    lv_obj_set_style_opa(static_cast<lv_obj_t *>(var), (lv_opa_t) v, 0);
+  }
+  static void anim_y_cb_(void *var, int32_t v) { lv_obj_set_y(static_cast<lv_obj_t *>(var), v); }
+  // There is only ever one boot view, and it is gone for good once this fires.
+  static void fade_done_cb_(lv_anim_t *a) { s_fade_done = true; }
+  static inline bool s_fade_done = false;
+
+  lv_obj_t *root_ = nullptr, *logo_ = nullptr, *notice_ = nullptr, *help_ = nullptr;
+  lv_obj_t *detail_ = nullptr, *support_ = nullptr;
+  lv_obj_t *steps_[STEPS] = {nullptr, nullptr, nullptr, nullptr};
+  std::string fw_, ssid_, name_, status_, help_text_, detail_text_, notice_text_;
+  Step step_ = S_WIFI;
+  bool started_ = false, have_net_ = false, have_doc_ = false, have_time_ = false, unpaired_ = false;
+  int problems_ = 0;
+  // last_now_ is the millis the last tick ran at: the helpers above set their hold from it, and
+  // an event arriving between ticks is at most 100 ms out, which nothing here cares about.
+  uint32_t t0_ = 0, hold_until_ = 0, content_at_ = 0, last_now_ = 0;
 };
 
 // ---- board: the departures or arrivals template, geometry unchanged from Phase 1a.
@@ -776,8 +1051,9 @@ class GenericView : public PageView {
 // ---------------------------------------------------------------- the host
 class PageHost {
  public:
-  // Builds the carousel (or the stack) inside content_page's root object, with the clock on it.
-  void attach(lv_obj_t *content_root) {
+  // Builds the carousel (or the stack) inside content_page's root object, with the clock on it,
+  // and puts the boot overlay on top of the lot.
+  void attach(lv_obj_t *content_root, const std::string &fw) {
     if (host_ != nullptr) return;
     host_ = mk_obj(content_root, 0, 0, 480, 480);
     lv_obj_set_style_bg_color(host_, lv_color_hex(COL_BG), 0);
@@ -801,6 +1077,8 @@ class PageHost {
     views_.clear();
     views_.emplace_back(new ClockView(host_));
     cur_ = 0;
+    boot_.reset(new BootView(host_, fw));
+    if (!ssid_.empty()) boot_->on_network(ssid_);   // in case Wi-Fi came up before we were attached
     layout_();
     show(0, false);
   }
@@ -828,6 +1106,8 @@ class PageHost {
       next.push_back(std::move(v));
     }
     views_ = std::move(next);  // whatever the document dropped is destroyed here
+    if (boot_) boot_->on_document(doc.name);
+    static_cast<ClockView *>(views_[0].get())->clear_problem();
     clock_weather_(doc);
     layout_();
     size_t idx = cur_ < views_.size() ? cur_ : views_.size() - 1;
@@ -860,6 +1140,8 @@ class PageHost {
     views_.push_back(std::move(pair));
     layout_();
     show(cur_ < views_.size() ? cur_ : views_.size() - 1, false);
+    if (boot_) boot_->on_unpaired(code);
+    raise_boot_();   // the pairing view was just created on top of everything, including us
   }
 
   void show(size_t index, bool animate) {
@@ -911,17 +1193,38 @@ class PageHost {
     if (now.is_valid()) {
       g_nowhm = now.strftime("%H:%M");
       g_today = now.strftime("%Y%m%d");
+      if (boot_) boot_->on_time_valid();
     }
     for (auto &v : views_) v->tick(now);
   }
 
-  void set_status(const std::string &msg) {
-    for (auto &v : views_) v->set_status(msg);
+  // The boot sequence's own clock, off the 100 ms interval. The overlay goes when its fade has
+  // finished, one tick later, and the object count in the heap log comes back with it.
+  void tick_fast(uint32_t now_ms) {
+    if (!boot_) return;
+    boot_->tick_fast(now_ms);
+    if (boot_->finished()) {
+      boot_.reset();
+      ESP_LOGI("hb", "boot view done");
+    }
+  }
+  bool booting() const { return (bool) boot_; }
+
+  // Remembered even before attach, so a network that comes up early still reaches the support line.
+  void set_network(const std::string &ssid) {
+    ssid_ = ssid;
+    if (boot_) boot_->on_network(ssid);
+  }
+
+  void set_status(const std::string &msg, bool problem = false) {
+    for (auto &v : views_) v->set_status(msg, problem);
+    if (boot_) boot_->on_status(msg, problem);
   }
 
   // Firmware update progress and the post-update confirmation, shown on the clock page only so a
   // board or agenda keeps its own footer. An empty string clears it.
   void set_notice(const std::string &msg) {
+    if (boot_) boot_->set_notice(msg);
     if (views_.empty()) return;
     static_cast<ClockView *>(views_[0].get())->set_notice(msg);
   }
@@ -987,6 +1290,11 @@ class PageHost {
 #endif
       views_[i]->set_counter(i + 1, views_.size());
     }
+    raise_boot_();   // re-indexing the views has just put them above the overlay
+  }
+
+  void raise_boot_() {
+    if (boot_) boot_->raise();
   }
 
   // The clock page carries the first row of the weather page when the document has one.
@@ -1037,6 +1345,9 @@ class PageHost {
 
   lv_obj_t *host_ = nullptr;
   std::vector<std::unique_ptr<PageView>> views_;
+  // The boot overlay is never a page: it is owned here and destroyed once, on its own.
+  std::unique_ptr<BootView> boot_;
+  std::string ssid_;
   size_t cur_ = 0;
   bool unpaired_ = false;
 };

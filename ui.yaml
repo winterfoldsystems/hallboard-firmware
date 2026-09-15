@@ -32,6 +32,7 @@ lvgl:
         - label: {id: anchor_clock, x: 0, y: 0, width: 1, height: 1, text: "", text_font: clock_font, hidden: true}
         - label: {id: anchor_pair, x: 0, y: 0, width: 1, height: 1, text: "", text_font: pair_font, hidden: true}
         - label: {id: anchor_icon, x: 0, y: 0, width: 1, height: 1, text: "", text_font: icon_font, hidden: true}
+        - label: {id: anchor_wordmark, x: 0, y: 0, width: 1, height: 1, text: "", text_font: wordmark_font, hidden: true}
         - qrcode: {id: anchor_qr, x: 0, y: 0, size: 20, text: "", hidden: true}
     - id: detail_page
       bg_color: 0x000000
@@ -618,12 +619,19 @@ lvgl:
 # Fonts beyond LVGL's built-in Montserrat bitmaps. Montserrat Medium comes from Google Fonts at
 # build time; the Material Design Icons webfont is checked in under fonts/ with its licence.
 font:
-  # The clock page. Digits and a colon only: the glyphs are large and nothing else uses them.
+  # The clock page. Digits and a colon, plus a space and a hyphen as a safety so a stray
+  # separator can never draw as a missing-glyph box at 120 px.
   - file: "gfonts://Montserrat@medium"
     id: clock_font
     size: 120
     bpp: 4
-    glyphs: ["0123456789:"]
+    glyphs: [" -0123456789:"]
+  # The boot wordmark. A stand-in for a real logo: only the letters "HallBoard" needs.
+  - file: "gfonts://Montserrat@medium"
+    id: wordmark_font
+    size: 56
+    bpp: 4
+    glyphs: ["HalBord"]
   # The pairing code. The pairing alphabet has no I, L, O or S (docs/api-v1.md). 64 px is the
   # largest size at which a six-character code plus its separating space always fits 480 px.
   - file: "gfonts://Montserrat@medium"
