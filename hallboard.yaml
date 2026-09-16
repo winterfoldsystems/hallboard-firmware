@@ -8,19 +8,24 @@
 #
 # Wi-Fi is set up on the device: long-press the side button (0.7 to 6 s), pick a network, type the
 # password. Credentials are saved in flash. Holding the button 8 to 15 s is a factory reset: the
-# device secret is wiped and the board re-pairs.
+# whole NVS partition is erased, so the device secret, the claim and the saved Wi-Fi network all
+# go and the board comes back as if it had never been set up. That is what makes a unit safe to
+# hand on. Settings in NVS are encrypted under a key the chip derives from an eFuse HMAC key
+# (see the esp32 block below), which protects them against the flash being read directly; USB
+# reflashing stays open on every unit, so a program loaded over USB can still decrypt them.
 #
 # From Phase 1c the board updates itself: it asks GET /v1/device/firmware for a manifest, streams
 # the offered image into the spare app slot over TLS, checks its SHA-256, and reboots into it. The
 # bootloader rolls back to the previous slot if the new image never confirms a good boot, which
-# safe_mode does once the backend answers (or after ten minutes as the safety net). The bootloader
-# and the partition table are never written.
+# safe_mode does once the backend answers (or after ten minutes as the safety net). When it does
+# roll back, the old image reports the failed version to the backend on its next boot (fw_pending).
+# The bootloader and the partition table are never written.
 # Shared parts live in hardware.yaml / ui.yaml; the pages in hb_ui.h, the logic in
 # trainboard_logic.h.
 
 substitutions:
   backend_base: "https://api.hallboard.co.uk"
-  fw_version: "1.3.7"
+  fw_version: "1.4.0"
 
 esphome:
   name: hallboard
@@ -74,6 +79,17 @@ esphome:
             hb::g_host.set_notice("Updated to ${fw_version}");
             id(fw_notice_until) = millis() + 60000;
           }
+          // The other outcome: an image was installed, the board rebooted into it, and it never
+          // confirmed a good boot, so the bootloader came back to this slot. fw_pending still
+          // names what was installed and it is not what is running, which is the whole test.
+          // (When the new image boots but only safe_mode's ten-minute net confirms it, fw_pending
+          // equals ${fw_version} and a later restart is correctly read as no rollback.)
+          if (id(fw_pending)[0] != '\0' && strcmp(id(fw_pending), "${fw_version}") != 0) {
+            ESP_LOGW("hb", "rolled back from %s to ${fw_version}", id(fw_pending));
+            id(fw_result_body) = std::string("{\"version\":\"") + id(fw_pending) +
+                                 "\",\"ok\":false,\"error\":\"rolled_back\"}";
+            memset(id(fw_pending), 0, sizeof(id(fw_pending)));
+          }
       - lambda: |-
           tb::g_fetcher.start();
           wifi::global_wifi_component->set_keep_scan_results(true);
@@ -98,6 +114,29 @@ esp32:
   framework:
     advanced:
       enable_ota_rollback: true
+      # Everything the board keeps between boots lives in NVS: the device secret, the claim, the
+      # saved Wi-Fi network, the station choices. Encrypt it. The two NVS keys are derived at
+      # runtime by the HMAC peripheral from a 256-bit key held in eFuse key block 0, which the
+      # chip fills with random bytes on the first boot of an image built this way and then
+      # read-protects. No key material is in the image, so every unit (and every bring-your-own
+      # board flashed from the portal) ends up with its own.
+      #
+      # Three things to know before changing this line:
+      #   * The eFuse write is permanent. Block 0 cannot be erased, reused or read back
+      #     afterwards, and the build prints a warning saying so.
+      #   * Turning encryption on, or later off, wipes the saved preferences once, because what
+      #     is already in the partition can no longer be read. A unit taking this release loses
+      #     its Wi-Fi and its pairing once, and only once.
+      #   * That is why there is one image for every unit rather than a plain build and an
+      #     encrypted build for units that are sold: the two cannot be swapped on a board without
+      #     that wipe, so two variants would mean two release channels.
+      #
+      # This is not flash encryption and not Secure Boot; neither is on the roadmap. USB
+      # reflashing stays open deliberately (GPLv3 section 6, and the portal invites people to
+      # flash their own boards), so a program loaded over USB can still read these settings out.
+      # What this defeats is reading the flash chip.
+      nvs_encryption:
+        key_id: 0
 
 # http_request is the only OTA platform in the config: it opens no socket and nothing listens on
 # the device. The install itself is ours (trainboard_logic.h) because ESPHome's flash action is
@@ -202,8 +241,13 @@ globals:
   - {id: night_brightness, type: int, initial_value: '20'}
   - {id: night_lift_until, type: uint32_t, initial_value: '0'}
   - {id: applied_brightness, type: int, initial_value: '-1'}
-  # Firmware updates. None of this is restored across boots: a manifest check is cheap, and an
-  # interrupted install must start again from the manifest rather than from a half-written slot.
+  # Firmware updates. Almost none of this is restored across boots: a manifest check is cheap, and
+  # an interrupted install must start again from the manifest rather than from a half-written slot.
+  # fw_pending is the exception. It holds the version this board is about to reboot into, so that
+  # if the bootloader rolls the image back the old firmware finds it on the next boot and can say
+  # which version failed. confirm_boot clears it. A version is digits and dots only (validated by
+  # parse_firmware) and at most 16 characters, so 33 bytes is room to spare.
+  - {id: fw_pending, type: 'char[33]', restore_value: true}
   - {id: boot_confirmed, type: bool, initial_value: 'false'}
   - {id: fw_check_at, type: uint32_t, initial_value: '0'}   # 0 until the backend has answered once
   - {id: fw_have_offer, type: bool, initial_value: 'false'}
@@ -299,9 +343,14 @@ script:
             auto* av = hb::g_host.current_agenda();
             if (av != nullptr) { av->render(); av->scroll_top(); }
           } else if (msg == "BUTTON") {
+            // The picker edits a pair of CRS stations, which is a rail board and nothing else: a
+            // tube or bus board is a TfL stop chosen in the portal and has no station to change.
+            // picker_ordinal answers -1 there, and on a document with no rail board at all, and
+            // then the button does nothing rather than editing some other page's station.
+            int ord = hb::g_host.picker_ordinal(hb::g_host.current());
+            if (ord < 0) return;
             id(detail_until) = 0;
-            int ord = hb::g_host.board_ordinal(hb::g_host.current());
-            id(set_board) = ord >= 0 ? ord : 0;
+            id(set_board) = ord;
             id(set_step) = 1;
             open_settings(step1_title());
           } else if (msg == "MODE" && id(set_step) == 1) {
@@ -454,19 +503,20 @@ script:
           j.inm = id(screen_etag);
           tb::g_fetcher.submit(j);
 
-  # ---- factory reset (8 to 15 s hold): forget the secret and the claim, then restart.
-  # safe_reboot() runs the shutdown hooks, so the wiped globals are written to flash first.
+  # ---- factory reset (8 to 15 s hold): erase everything this board has been told, then restart.
+  # global_preferences->reset() erases the whole NVS partition rather than clearing the globals
+  # one by one, so the saved Wi-Fi network goes with the device secret and the claim: a board that
+  # changes hands must not carry the previous household's Wi-Fi password. Wi-Fi credentials are
+  # only ever in ESPHome preferences (the esp-idf driver is put in WIFI_STORAGE_RAM and keeps no
+  # copy of its own), so erasing the partition is enough. reset() also zeroes the NVS handle, so
+  # the shutdown hooks safe_reboot() runs cannot write any of it back during the delay below.
   - id: factory_reset
     then:
       - lambda: |-
-          memset(id(device_secret), 0, sizeof(id(device_secret)));
-          id(claimed) = false;
-          id(screen_etag).clear();
-          id(pair_code).clear();
-          id(pair_expires_at) = 0;
-          ESP_LOGW("hb", "factory reset: device credential wiped, restarting");
+          ESP_LOGW("hb", "factory reset: erasing saved settings, restarting");
           hb::g_host.set_unpaired("");
           hb::g_host.set_status("Forgetting this device and restarting...");
+          esphome::global_preferences->reset();
       - delay: 1500ms
       - lambda: |-
           App.safe_reboot();
@@ -482,6 +532,8 @@ script:
           id(boot_confirmed) = true;
           id(safe_mode_1)->mark_successful();
           ESP_LOGI("hb", "boot confirmed");
+          // This image has proved itself, so there is no rollback left to report.
+          if (id(fw_pending)[0] != '\0') memset(id(fw_pending), 0, sizeof(id(fw_pending)));
           // First firmware check two minutes later, then every six hours.
           if (!id(fw_check_at)) id(fw_check_at) = millis() + 120000;
           if (id(fw_notice_until)) {
@@ -523,8 +575,11 @@ script:
                 j.auth = std::string("Bearer ") + id(device_secret);
                 if (tb::g_fetcher.submit(j)) id(pending_detail).clear();
               }
-            } else if (!id(fw_result_body).empty()) {
-              // How the install went, so a rollout can be watched from the backend.
+            } else if (!id(fw_result_body).empty() && wifi::global_wifi_component->is_connected()) {
+              // How the install went, or that the bootloader rolled the image back, so a rollout
+              // can be watched from the backend. Only with the network up: the rollback report is
+              // written during on_boot, and submitting it before Wi-Fi is back would spend the one
+              // attempt there is on a request that cannot leave the board.
               tb::Job j;
               j.kind = tb::JOB_FWRESULT;
               j.method = tb::M_POST;
@@ -644,6 +699,11 @@ script:
             id(fw_pct_shown) = -1;
             if (r.status == 200) {
               hb::g_host.set_notice("Updating firmware 100%");
+              // Written before the reboot below, and restored on the next boot whichever slot the
+              // bootloader picks. The restoring global is saved within a second of changing and
+              // again by the shutdown hooks, and the reboot is at least one backend round trip
+              // away, so it is on flash before the board goes down.
+              snprintf(id(fw_pending), sizeof(id(fw_pending)), "%s", r.tag.c_str());
               id(fw_result_body) = std::string("{\"version\":\"") + r.tag + "\",\"ok\":true}";
               // Reboot once the backend has been told, or after ten seconds either way.
               id(fw_reboot_at) = millis() + 10000;

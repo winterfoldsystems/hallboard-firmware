@@ -189,6 +189,9 @@ inline bool parse_screen(const std::string &body, hb::Document &out) {
     if (!strcmp(type, "board")) {
       p.type = 'b';
       p.title = jstr(pg["title"], 40);
+      // "rail", "tube" or "bus". Absent on a backend older than the tube and bus modules, which
+      // only ever built rail boards; BoardView reads an empty module as rail for that reason.
+      p.module = jstr(pg["module"], 24);
       p.mode = jstr(pg["mode"], 4);
       JsonArray rows = pg["rows"].as<JsonArray>();
       for (JsonObject rw : rows) {
@@ -250,6 +253,9 @@ inline bool parse_screen(const std::string &body, hb::Document &out) {
   if (!st.isNull()) {
     // The household's name for this board, for the boot support line. Absent on an older backend.
     out.name = jstr(st["name"], 32);
+    // A short ASCII line for the clock page, for example a payment that needs attention. Absent
+    // or empty means there is nothing to say, which is how a notice is taken down again.
+    out.notice = jstr(st["notice"], 40);
     if (st["brightness"].is<int>()) {
       int b = st["brightness"].as<int>();
       if (b >= 0 && b <= 100) out.settings.brightness = b;

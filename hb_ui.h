@@ -78,6 +78,9 @@ struct Document {
   std::string tz;    // the household's IANA zone, informational
   std::string tzp;   // the same zone as a POSIX TZ string, which is what the clock wants
   std::string name;  // the household's name for this board, shown on the boot support line
+  // A short line the backend wants the household to read (a payment problem, say), shown on the
+  // clock page. It lasts until a document says otherwise, so an empty string is how it clears.
+  std::string notice;
   std::vector<Page> pages;
   Settings settings;
 };
@@ -342,8 +345,9 @@ class ClockView : public PageView {
     lv_obj_set_style_text_align(waiting_, LV_TEXT_ALIGN_CENTER, 0);
     date_ = mk_label(root_, 0, 296, 480, 36, &lv_font_montserrat_28, COL_DIM, "");
     lv_obj_set_style_text_align(date_, LV_TEXT_ALIGN_CENTER, 0);
-    // Only shown while something is wrong, and only for a problem status: the clock page is what
-    // the household looks at, so it stays a clock until support needs a clue.
+    // Only shown while something is wrong, and only for a problem status or a notice carried by
+    // the document: the clock page is what the household looks at, so it stays a clock until
+    // support (or the backend) needs a line.
     problem_ = mk_label(root_, 14, 380, 452, 26, &lv_font_montserrat_20, COL_GREY, "");
     lv_obj_set_style_text_align(problem_, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(problem_, LV_LABEL_LONG_MODE_DOTS);
@@ -390,6 +394,15 @@ class ClockView : public PageView {
     if (notice_ == msg) return;
     notice_ = msg;
     refresh_line_();
+    refresh_problem_();   // a firmware notice holds the document's notice back while it runs
+  }
+  // The document's own notice, from `settings.notice`. It shares the small grey line with a
+  // problem status, which wins while it lasts, and unlike a problem it survives the next
+  // document: only another document (or an empty notice in one) takes it away.
+  void set_doc_notice(const std::string &msg) {
+    if (doc_notice_ == msg) return;
+    doc_notice_ = msg;
+    refresh_problem_();
   }
   // Informational statuses are dropped: the clock page stays a clock. A problem is worth a small
   // grey line, cleared by clear_problem() as soon as a document arrives.
@@ -397,14 +410,12 @@ class ClockView : public PageView {
     if (!problem) return;
     if (problem_text_ == msg) return;
     problem_text_ = msg;
-    lv_label_set_text(problem_, msg.c_str());
-    set_hidden(problem_, msg.empty());
+    refresh_problem_();
   }
   void clear_problem() {
     if (problem_text_.empty()) return;
     problem_text_.clear();
-    lv_label_set_text(problem_, "");
-    set_hidden(problem_, true);
+    refresh_problem_();
   }
 
  private:
@@ -412,9 +423,19 @@ class ClockView : public PageView {
     lv_label_set_text(weather_, notice_.empty() ? weather_text_.c_str() : notice_.c_str());
     lv_obj_set_style_text_color(weather_, lv_color_hex(notice_.empty() ? COL_AMBER : COL_WHITE), 0);
   }
+  // A live problem first, then the document's notice, and nothing at all while a firmware notice
+  // is on the line below: an update in progress is not the moment for a billing line.
+  void refresh_problem_() {
+    const std::string &text = !problem_text_.empty() ? problem_text_
+                              : notice_.empty()      ? doc_notice_
+                                                     : empty_;
+    lv_label_set_text(problem_, text.c_str());
+    set_hidden(problem_, text.empty());
+  }
 
   lv_obj_t *time_ = nullptr, *waiting_ = nullptr, *date_ = nullptr, *problem_ = nullptr, *weather_ = nullptr;
-  std::string last_hm_, weather_text_, notice_, problem_text_;
+  std::string last_hm_, weather_text_, notice_, problem_text_, doc_notice_;
+  const std::string empty_;
 };
 
 // ---- pairing: the only page besides the clock while the device is unclaimed. The QR encodes the
@@ -764,6 +785,12 @@ class BoardView : public PageView {
 
   void apply(const Page &pg) override {
     arrivals_ = pg.mode == "arr";
+    // The module decides the empty-state wording and whether the side button has anything to do
+    // here: only a rail board is a pair of CRS stations the picker can change. A document from a
+    // backend that does not send `module` is rail, which is all there was before 1.4.0.
+    module_ = pg.module;
+    rail_ = module_.empty() || module_ == "rail";
+    set_hint(rail_ ? " swipe: next \xE2\x80\xA2 button: edit" : " swipe: next");
     if (!pg.title.empty()) lv_label_set_text(title_, pg.title.c_str());
     uids_.clear();
     for (int i = 0; i < ROWS; i++) {
@@ -790,10 +817,14 @@ class BoardView : public PageView {
       // asof is 0 only when the backend could not build this board at all. Say so rather than
       // claiming there is nothing due.
       bool missing = pg.asof == 0;
-      lv_label_set_text(rows_[0].dest, missing ? "Board unavailable" : "No trains");
-      lv_label_set_text(rows_[0].status, missing ? "Not in the last update from the backend"
-                                                 : (arrivals_ ? "None arriving in the next 2 hours"
-                                                              : "None due in the next 2 hours"));
+      // A bus stop shows buses; rail and tube boards both show trains. Only a rail board can
+      // promise a window, because only its backend adapter asks for one.
+      const char *none = module_ == "bus" ? "No buses" : "No trains";
+      const char *waiting = rail_ ? (arrivals_ ? "None arriving in the next 2 hours"
+                                               : "None due in the next 2 hours")
+                                  : "Nothing expected at this stop";
+      lv_label_set_text(rows_[0].dest, missing ? "Board unavailable" : none);
+      lv_label_set_text(rows_[0].status, missing ? "Not in the last update from the backend" : waiting);
       lv_obj_set_style_text_color(rows_[0].status, lv_color_hex(COL_DIM), 0);
       lv_obj_set_style_border_color(rows_[0].card, lv_color_hex(COL_FOOT), 0);
       set_hidden(rows_[0].card, false);
@@ -817,6 +848,9 @@ class BoardView : public PageView {
     return uids_[i];
   }
 
+  // True for a national rail board, the only kind the on-device station picker can edit.
+  bool rail() const { return rail_; }
+
  private:
   struct Row {
     lv_obj_t *card = nullptr, *time = nullptr, *dest = nullptr, *plat = nullptr, *exp = nullptr, *status = nullptr;
@@ -837,7 +871,9 @@ class BoardView : public PageView {
 
   Row rows_[ROWS];
   std::vector<std::string> uids_;
+  std::string module_;
   bool arrivals_ = false;
+  bool rail_ = true;
 };
 
 // ---- agenda: the 1a render_calendar algorithm, with cards created on demand instead of a pool of
@@ -1114,7 +1150,11 @@ class PageHost {
     }
     views_ = std::move(next);  // whatever the document dropped is destroyed here
     if (boot_) boot_->on_document(doc.name);
-    static_cast<ClockView *>(views_[0].get())->clear_problem();
+    auto *clock = static_cast<ClockView *>(views_[0].get());
+    clock->clear_problem();
+    // The document's notice goes on after the problem line has been cleared, so the arrival of a
+    // document no longer wipes it: only a document without one does.
+    clock->set_doc_notice(doc.notice);
     clock_weather_(doc);
     layout_();
     size_t idx = cur_ < views_.size() ? cur_ : views_.size() - 1;
@@ -1142,6 +1182,8 @@ class PageHost {
     views_.clear();
     if (!pair) pair.reset(new PairingView(host_));
     static_cast<ClockView *>(clock.get())->set_weather("");
+    // The notice belonged to a household that no longer claims this device.
+    static_cast<ClockView *>(clock.get())->set_doc_notice("");
     static_cast<PairingView *>(pair.get())->set_code(code);
     views_.push_back(std::move(clock));
     views_.push_back(std::move(pair));
@@ -1264,6 +1306,25 @@ class PageHost {
     }
     return -1;
   }
+  // The board ordinal the side button's station picker should edit, starting from the page at
+  // `index`: that page when it is a rail board, otherwise the first rail board in the document so
+  // the button still works from the clock. -1 when there is nothing to edit, which is the answer
+  // on a tube or bus board (no CRS station to change) and in a document with no rail board.
+  int picker_ordinal(size_t index) const {
+    if (index < views_.size() && views_[index]->type() == 'b') {
+      int ord = board_ordinal(index);
+      return (ord >= 0 && static_cast<const BoardView *>(views_[index].get())->rail()) ? ord : -1;
+    }
+    int n = 0;
+    for (const auto &v : views_) {
+      if (v->type() != 'b') continue;
+      if (n >= 2) break;   // only the first two boards have station globals behind them
+      if (static_cast<const BoardView *>(v.get())->rail()) return n;
+      n++;
+    }
+    return -1;
+  }
+
   // The carousel index of a board ordinal, or -1 when the document has no such board.
   int board_index(int ordinal) const {
     int n = 0;
