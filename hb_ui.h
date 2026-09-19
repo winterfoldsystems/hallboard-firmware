@@ -858,10 +858,10 @@ class PairingView : public PageView {
   const std::string &qr_url() const { return qr_url_; }
 
  private:
-  static const int PAD = 40, TILE = 200, QUIET = 12, GAP = 24;
+  static const int PAD = 16, TILE = 200, QUIET = 12, GAP = 24;
   // The design's 360, widened to the full content width. LVGL breaks a line at a full stop as
   // readily as at a space, and at 360 that split hallboard.co.uk across two lines.
-  static const int CAPTION_W = 400;
+  static const int CAPTION_W = 448;
 
   // One slot, and three things that want it: a problem first, then the caption for whichever of
   // the two states the page is in.
@@ -936,7 +936,7 @@ class BootView {
 
     logo_ = make_logo_(root_, top);
     // The firmware notice keeps its slot between the mark and the steps.
-    notice_ = mk_label(root_, 40, top + MARK + 6, 400, 0, F(g_fonts.sans400_18), T_CHALK, "");
+    notice_ = mk_label(root_, 16, top + MARK + 6, 448, 0, F(g_fonts.sans400_18), T_CHALK, "");
     lv_obj_set_style_text_align(notice_, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(notice_, LV_LABEL_LONG_MODE_DOTS);
     for (int i = 0; i < STEPS; i++) {
@@ -946,7 +946,7 @@ class BootView {
       tracked(steps_[i], 1);
       lv_label_set_long_mode(steps_[i], LV_LABEL_LONG_MODE_DOTS);
     }
-    help_ = mk_label(root_, 40, help_y, 400, help_h, F(g_fonts.sans400_18), T_CHALK70, "");
+    help_ = mk_label(root_, 16, help_y, 448, help_h, F(g_fonts.sans400_18), T_CHALK70, "");
     lv_obj_set_style_text_align(help_, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(help_, LV_LABEL_LONG_MODE_WRAP);
     detail_ = mk_label(root_, 16, detail_y, 448, meta_h, F(g_fonts.mono15), T_CHALK50, "");

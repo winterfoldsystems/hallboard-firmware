@@ -50,9 +50,9 @@ lvgl:
       widgets:
         - label:
             id: detail_hdr
-            x: 24
-            y: 24
-            width: 432
+            x: 16
+            y: 16
+            width: 448
             height: 28
             text: ""
             text_font: fig600_20
@@ -60,18 +60,18 @@ lvgl:
             long_mode: DOT
         - label:
             id: detail_body
-            x: 24
-            y: 68
-            width: 432
-            height: 348
+            x: 16
+            y: 60
+            width: 448
+            height: 376
             text: ""
             text_font: mono400_16
             text_color: 0xABAAB2
         - label:
             id: detail_foot
-            x: 24
-            y: 436
-            width: 432
+            x: 16
+            y: 444
+            width: 448
             height: 20
             text: "Tap to close."
             text_font: mono400_15
@@ -91,7 +91,7 @@ lvgl:
             on_short_click:
               - script.execute: {id: ev, msg: "TOUCH"}
 
-    # Page 2: pick a network. Seven rows of 60 with 12 between them is 492 px and there are 278 to
+    # Page 2: pick a network. Seven rows of 60 with 12 between them is 492 px and there are 298 to
     # draw them in, so the list scrolls; the bottom row and the status line stay put.
     - id: wifi_page
       bg_color: 0x0F0E15
@@ -101,18 +101,18 @@ lvgl:
       widgets:
         - label:
             id: wifi_title
-            x: 24
-            y: 24
-            width: 432
+            x: 16
+            y: 16
+            width: 448
             height: 28
             text: "Choose your Wi-Fi"
             text_font: fig600_20
             text_color: 0xF5F4F9
         - label:
             id: wifi_status
-            x: 24
-            y: 58
-            width: 432
+            x: 16
+            y: 50
+            width: 448
             height: 20
             text: ""
             text_font: mono400_15
@@ -122,10 +122,10 @@ lvgl:
         # parent's content area, so without the padding the ring would be cut off at the edges.
         - obj:
             id: net_list
-            x: 18
-            y: 90
-            width: 444
-            height: 290
+            x: 10
+            y: 82
+            width: 464
+            height: 310
             bg_opa: TRANSP
             border_width: 0
             radius: 0
@@ -397,9 +397,9 @@ lvgl:
                         text_color: 0x807F87
         - button:
             id: wifi_scan_btn
-            x: 24
-            y: 396
-            width: 210
+            x: 16
+            y: 404
+            width: 218
             height: 60
             bg_color: 0x7A5AF8
             bg_opa: COVER
@@ -424,8 +424,8 @@ lvgl:
         - button:
             id: wifi_cancel_btn
             x: 246
-            y: 396
-            width: 210
+            y: 404
+            width: 218
             height: 60
             bg_opa: TRANSP
             border_width: 2
@@ -458,9 +458,9 @@ lvgl:
       widgets:
         - label:
             id: wifi_pw_title
-            x: 24
-            y: 24
-            width: 432
+            x: 16
+            y: 16
+            width: 448
             height: 28
             text: "Password"
             text_font: fig600_20
@@ -468,9 +468,9 @@ lvgl:
             long_mode: DOT
         - textarea:
             id: pw_ta
-            x: 24
-            y: 62
-            width: 432
+            x: 16
+            y: 54
+            width: 448
             height: 60
             one_line: true
             max_length: 63
@@ -497,18 +497,18 @@ lvgl:
               border_color: 0x7A5AF8
         - label:
             id: wifi_pw_help
-            x: 24
-            y: 134
-            width: 432
+            x: 16
+            y: 126
+            width: 448
             height: 22
             text: "Leave it empty if the network has none."
             text_font: fig500_16
             text_color: 0xABAAB2
         - button:
             id: wifi_connect_btn
-            x: 24
-            y: 168
-            width: 210
+            x: 16
+            y: 160
+            width: 218
             height: 60
             bg_color: 0x7A5AF8
             bg_opa: COVER
@@ -533,8 +533,8 @@ lvgl:
         - button:
             id: wifi_pw_cancel_btn
             x: 246
-            y: 168
-            width: 210
+            y: 160
+            width: 218
             height: 60
             bg_opa: TRANSP
             border_width: 2
