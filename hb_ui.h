@@ -1644,7 +1644,7 @@ class SkyView : public PageView {
   // and a bar area of 60. The six columns measure 400 on a 68 pitch, which is what centres them
   // in the 448 card. The card is taller than the design's 128 because a rasterised 16 px label
   // and a 14 px one need more room than the mock's line boxes did.
-  static const int COLS = 6, COL_W = 60, COL_PITCH = 68, CARD_PAD = 24, BAR_MAX = 60, BAR_MIN = 22, SEP = 9, RAIN_GAP = 6;
+  static const int COLS = 6, COL_W = 60, COL_PITCH = 68, CARD_PAD = 24, BAR_MAX = 60, BAR_MIN = 22, SEP = 9, RAIN_GAP = 16, CARD_FOOT = 14;
 
   struct Col {
     lv_obj_t *root = nullptr, *temp = nullptr, *bar = nullptr, *hour = nullptr, *rain = nullptr;
@@ -1657,7 +1657,9 @@ class SkyView : public PageView {
     // the hours along the foot. `top` is where the bar area's own column starts.
     int top = hh + SEP + RAIN_GAP;
     int inner = top + th + 6 + BAR_MAX + 6 + hh;
-    card_h_ = inner + 2 * CARD_PAD;
+    // The hours stand closer to the card's foot than the chances do to its top: the room that
+    // saves is the gap under the hairline.
+    card_h_ = inner + CARD_PAD + CARD_FOOT;
     card_y_ = 480 - margin_ - card_h_;
     card_ = mk_panel(root_, margin_, card_y_, TEXT_W, card_h_, T_CARD, 16);
     set_hidden(card_, true);
