@@ -36,7 +36,7 @@ const int W = 480, H = 480;
 const char *FW = "1.4.0";
 
 // 2026-09-18 08:41:07 Europe/London. Chosen so the agenda fixture has a spent event, a live one
-// and two later days, and so the stamp reads "LIVE · 08:38", inside the five-minute window.
+// and two later days, and so every clock reads 08:41.
 const time_t NOW_EPOCH = 1789717267;
 
 // ---------------------------------------------------------------- fonts
@@ -403,8 +403,8 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  // The zone the fixtures declare. stamp_text() and the clock both go through localtime, so this
-  // is what makes "LIVE · 08:38" and "Friday 18 September" the same on any machine.
+  // The zone the fixtures declare. The clock and the empty card's footer both go through
+  // localtime, so this is what makes "08:41" and "Friday 18 September" the same on any machine.
   setenv("TZ", "Europe/London", 1);
   tzset();
 

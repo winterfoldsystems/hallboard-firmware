@@ -165,8 +165,8 @@ inline void emit(const std::string &msg) {
 // Local time as the views need it, refreshed once a second by PageHost::tick.
 inline std::string g_today;  // "YYYYMMDD", empty until SNTP has synced
 inline std::string g_nowhm;  // "HH:MM"
-// The same instant as a Unix time, 0 until SNTP has synced. The stale rule reads this rather than
-// time(nullptr) so the host simulator's pinned clock decides the stamp too.
+// The same instant as a Unix time, 0 until SNTP has synced. Kept beside the strings so the host
+// simulator's pinned clock is the one instant every face reads.
 inline uint32_t g_now_epoch = 0;
 
 // A plain, unstyled object. lv_obj_create would pick up LVGL's default theme, so every panel here
@@ -240,16 +240,7 @@ inline lv_obj_t *mk_card(lv_obj_t *parent, int x, int y, int w, int h) {
   return mk_panel(parent, x, y, w, h, T_CARD, 16);
 }
 
-// True when what is on screen is older than the household should read as current: the document
-// said so, or nothing has been fetched for five minutes. Before the clock is set there is no way
-// to tell, and a board that says LIVE too long is better than one that cries stale on every boot.
-inline bool stale_now(uint32_t asof, bool stale) {
-  if (stale) return true;
-  if (asof == 0 || g_now_epoch == 0) return false;
-  return g_now_epoch > asof + 300;
-}
-
-// A Unix time as local "HH:MM", for the stamp and the empty card's footer.
+// A Unix time as local "HH:MM", for the empty card's footer.
 inline std::string hhmm_of(uint32_t when) {
   time_t t = (time_t) when;
   struct tm lt;
@@ -257,14 +248,6 @@ inline std::string hhmm_of(uint32_t when) {
   char buf[8];
   strftime(buf, sizeof buf, "%H:%M", &lt);
   return buf;
-}
-
-// The stamp in the corner of every content face: "LIVE · 08:41", "SHOWING 08:12", "LOADING".
-inline std::string stamp_text(uint32_t asof, bool stale) {
-  if (asof == 0) return copy::LOADING;
-  // U+00B7, the middle dot the design separates with.
-  return stale_now(asof, stale) ? copy::SHOWING + (" " + hhmm_of(asof))
-                                : copy::LIVE + (" \xC2\xB7 " + hhmm_of(asof));
 }
 
 // The footer of an empty card, which says how old what it stands in for is. Empty when the face
@@ -464,9 +447,8 @@ class StatusStrip {
     apply_breathing_();
   }
 
-  // The live dot breathes over four seconds. A stale board stops it: nothing about that screen
-  // is happening now. What the face asked for is remembered either way, so the night can stop
-  // the dot without the day having to be told to start it again.
+  // The live dot breathes over four seconds. What the face asked for is remembered, so the night
+  // can stop the dot without the day having to be told to start it again.
   void set_breathing(bool on) {
     breathing_ = on;
     apply_breathing_();
@@ -628,7 +610,7 @@ class PageView {
 
  protected:
   // The chrome the generic template shares with the board: the strip, with the page title on the
-  // left and the stamp (or, until one arrives, the clock) on the right.
+  // left and the clock on the right.
   void build_header_(const char *title) {
     strip_.build(root_, margin_);
     strip_.set_left_font(F(g_fonts.sans600_20));
@@ -652,22 +634,19 @@ class PageView {
     set_hidden(status_, msg.empty());
   }
   void set_title_(const std::string &title) { strip_.set_left(title, T_CHALK); }
-  // The freshness stamp owns the right of the strip once a document has been through the page.
-  // Live is the quieter tone of the two, as it is on the board: a stamp that has gone to
-  // SHOWING is the one worth reading.
-  void set_stamp_(uint32_t asof, bool stale) {
-    stamp_ = stamp_text(asof, stale);
-    strip_.set_right(stamp_, stale_now(asof, stale) ? T_CHALK70 : T_CHALK50);
-  }
+  // The clock owns the right of the strip on every face that has one. Written once a minute:
+  // the tick comes every second and a label rewrite is a redraw.
   void tick_header_(const esphome::ESPTime &now) {
-    if (!stamp_.empty()) return;   // a stamp says more than the time does
-    strip_.set_right(now.is_valid() ? g_nowhm : std::string("--:--"), T_CHALK70);
+    std::string hm = now.is_valid() ? g_nowhm : std::string("--:--");
+    if (hm == strip_hm_) return;
+    strip_hm_ = hm;
+    strip_.set_right(hm, T_CHALK70);
   }
 
   lv_obj_t *root_ = nullptr;
   lv_obj_t *status_ = nullptr;
   StatusStrip strip_;
-  std::string id_, module_, status_text_, stamp_;
+  std::string id_, module_, status_text_, strip_hm_;
   char type_;
   int margin_;
 };
@@ -1217,7 +1196,7 @@ class BootView {
 
 // ---- board: the departures or arrivals template, laid out as BoardFace in the design system.
 //
-// 36 px of padding, a header whose title and stamp share one baseline, then four rows. The
+// 36 px of padding, a header whose title and clock share one baseline, then four rows. The
 // design's 22 px gap between rows would put the fourth one under the page dots, so the gap is 12
 // and only the header keeps its 22. That gives rows at 94 (raised, 76 tall), 182, 264 and 346
 // (70 tall each, ending at 416), the problem line at 424 and the dots at 459.
@@ -1230,15 +1209,15 @@ class BoardView : public PageView {
 
   BoardView(lv_obj_t *parent, const std::string &id) : PageView(parent, id, 'b') {
     // The header is two labels rather than a StatusStrip: the design sets the title in 30 px
-    // Figtree and sits the mono stamp on its baseline, which the strip's one band cannot do.
+    // Figtree and sits the mono clock on its baseline, which the strip's one band cannot do.
     const lv_font_t *tf = F(g_fonts.sans600_30), *sf = F(g_fonts.mono15);
-    int stamp_y = HEAD_Y + (lv_font_get_line_height(tf) - tf->base_line) -
+    int clock_y = HEAD_Y + (lv_font_get_line_height(tf) - tf->base_line) -
                   (lv_font_get_line_height(sf) - sf->base_line);
     title_ = mk_label(root_, PAD, HEAD_Y, 266, 40, tf, T_CHALK, "");
     lv_label_set_long_mode(title_, LV_LABEL_LONG_MODE_DOTS);
-    stamp_lbl_ = mk_label(root_, 480 - PAD - 130, stamp_y, 130, 20, sf, T_CHALK50, copy::LOADING);
-    tracked(stamp_lbl_, 1);
-    lv_obj_set_style_text_align(stamp_lbl_, LV_TEXT_ALIGN_RIGHT, 0);
+    clock_ = mk_label(root_, 480 - PAD - 130, clock_y, 130, 20, sf, T_CHALK70, "");
+    tracked(clock_, 1);
+    lv_obj_set_style_text_align(clock_, LV_TEXT_ALIGN_RIGHT, 0);
 
     for (int i = 0; i < ROWS_SHOWN; i++) build_row_(rows_[i], i);
     build_card_();
@@ -1268,8 +1247,6 @@ class BoardView : public PageView {
     // The header has room for a name, not a sentence, which is what `short` is for.
     const std::string &head = pg.short_title.empty() ? pg.title : pg.short_title;
     if (!head.empty()) lv_label_set_text(title_, head.c_str());
-    asof_ = pg.asof;
-    stale_ = pg.stale;
     show_problem_("");   // a document is the answer to whatever the last problem was about
     uids_.clear();
     int n = (int) pg.rows.size();
@@ -1297,15 +1274,14 @@ class BoardView : public PageView {
     }
     set_hidden(card_, n > 0);
     if (n == 0) fill_card_(pg);
-    refresh_stamp_();
   }
 
-  // The stamp is rebuilt once a minute, because a board that stops being fetched crosses the
-  // five-minute line on its own and has to say so.
+  // The clock in the header, written once a minute.
   void tick(esphome::ESPTime now) override {
-    if (g_nowhm == last_hm_) return;
-    last_hm_ = g_nowhm;
-    refresh_stamp_();
+    std::string hm = now.is_valid() ? g_nowhm : std::string("--:--");
+    if (hm == last_hm_) return;
+    last_hm_ = hm;
+    lv_label_set_text(clock_, hm.c_str());
   }
 
   const std::string &uid_at(int i) const {
@@ -1393,14 +1369,6 @@ class BoardView : public PageView {
     lv_obj_set_height(card_, CARD_TEXT_Y + th + (foot.empty() ? 0 : 32) + 24);
   }
 
-  void refresh_stamp_() {
-    bool old = stale_now(asof_, stale_);
-    lv_label_set_text(stamp_lbl_, stamp_text(asof_, stale_).c_str());
-    if (old == stamp_stale_) return;
-    stamp_stale_ = old;
-    set_tok(stamp_lbl_, old ? T_CHALK70 : T_CHALK50);
-  }
-
   static void touch_cb_(lv_event_t *e) { emit("TOUCH"); }
   static void long_cb_(lv_event_t *e) {
     lv_obj_t *o = lv_event_get_target_obj(e);
@@ -1411,12 +1379,11 @@ class BoardView : public PageView {
   static const int CARD_TEXT_Y = 56;
 
   Row rows_[ROWS_SHOWN];
-  lv_obj_t *title_ = nullptr, *stamp_lbl_ = nullptr;
+  lv_obj_t *title_ = nullptr, *clock_ = nullptr;
   lv_obj_t *card_ = nullptr, *card_label_ = nullptr, *card_text_ = nullptr, *card_foot_ = nullptr;
   std::vector<std::string> uids_;
   std::string last_hm_;
-  uint32_t asof_ = 0;
-  bool stale_ = false, stamp_stale_ = false, arrivals_ = false;
+  bool arrivals_ = false;
 };
 
 // ---- day: the diary, laid out as DayFace in the design system.
@@ -1449,13 +1416,13 @@ class AgendaView : public PageView {
   void apply(const Page &pg) override {
     events_ = pg.events;
     asof_ = pg.asof;
-    stale_ = pg.stale;
     render();
   }
 
   // The whole face is rebuilt on the minute: which event is next, how long it is until it starts
   // and how much of today is left all move with the clock, not with the document.
   void tick(esphome::ESPTime now) override {
+    tick_header_(now);
     if (g_nowhm == last_hm_ && day_ == long_day(now)) return;
     last_hm_ = g_nowhm;
     day_ = long_day(now);
@@ -1480,7 +1447,6 @@ class AgendaView : public PageView {
       if (next == nullptr && !it.all_day) next = &it;
     }
     strip_.set_left(head_text_(today), T_CALENDAR);
-    set_stamp_(asof_, stale_);
 
     int card = 0, head = 0, y = 0, shown = 0;
     bool after_row = false;   // a hairline goes between two resting rows and nowhere else
@@ -1639,7 +1605,6 @@ class AgendaView : public PageView {
   // what tells a "TOMORROW" heading from a weekday one.
   std::string day_, short_day_, last_hm_, tomorrow_;
   uint32_t asof_ = 0;
-  bool stale_ = false;
 };
 
 // ---- sky: the weather face, laid out as SkyFace in the design system.
@@ -1669,9 +1634,7 @@ class SkyView : public PageView {
 
   void apply(const Page &pg) override {
     asof_ = pg.asof;
-    stale_ = pg.stale;
     strip_.set_left(pg.place.empty() ? std::string(copy::WEATHER) : upper(pg.place), T_WEATHER);
-    set_stamp_(asof_, stale_);
 
     std::string temp = pg.temp, feels = pg.feels, head = pg.head, sent = pg.sent;
     bool hours = !temp.empty() && !pg.hours.empty();
@@ -1807,7 +1770,6 @@ class SkyView : public PageView {
   EmptyCard empty_;
   int card_h_ = 0, card_y_ = 0, bar_top_ = 0;
   uint32_t asof_ = 0;
-  bool stale_ = false;
 };
 
 // ---- list: the to-do face, laid out as ListFace in the design system.
@@ -1838,7 +1800,6 @@ class ListView : public PageView {
 
   void apply(const Page &pg) override {
     label_text(eyebrow_, upper(pg.title));
-    set_stamp_(pg.asof, pg.stale);
     for (auto &r : rows_) set_hidden(r.box, true);
     int n = (int) pg.grows.size();
     if (n > MAX_ROWS) n = MAX_ROWS;
@@ -1860,8 +1821,9 @@ class ListView : public PageView {
     empty_.set(copy::ALL_DONE, copy::LIST_EMPTY, showing_foot(pg.asof));
   }
 
-  // The strip carries the short date, as the clock's does, and the stamp owns the other end.
+  // The strip carries the short date, as the clock's does, and the time owns the other end.
   void tick(esphome::ESPTime now) override {
+    tick_header_(now);
     if (g_nowhm == last_hm_) return;
     last_hm_ = g_nowhm;
     strip_.set_left(now.is_valid() ? ClockView::short_date(now) : std::string(), T_CHALK70);
@@ -1942,7 +1904,6 @@ class GenericView : public PageView {
       place_(r.b, d.b);
       set_hidden(r.box, false);
     }
-    set_stamp_(pg.asof, pg.stale);
   }
 
   void tick(esphome::ESPTime now) override { tick_header_(now); }
