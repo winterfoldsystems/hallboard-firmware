@@ -550,7 +550,7 @@ class FaceDots {
 class PageView {
  public:
   PageView(lv_obj_t *parent, std::string id, char type)
-      : id_(std::move(id)), type_(type), margin_(type == 'b' ? 36 : 24) {
+      : id_(std::move(id)), type_(type), margin_(16) {
     root_ = mk_panel(parent, 0, 0, 480, 480, T_NIGHT, 0);
   }
   PageView(const PageView &) = delete;
@@ -563,9 +563,8 @@ class PageView {
   virtual void tick(esphome::ESPTime now) {}
 
   // A transient line (Wi-Fi, backend errors). A content face shows problems only: an
-  // informational status is dropped, because the stamp already says how old what is on screen
-  // is, which is all such a face would gain from one. The clock and the pairing page, which have
-  // no stamp, override this.
+  // informational status is dropped, because a face full of data has nothing to gain from one.
+  // The clock and the pairing page override this.
   virtual void set_status(const std::string &msg, bool problem) {
     if (!problem) return;
     show_problem_(msg);
@@ -594,7 +593,7 @@ class PageView {
     strip_.set_left(title, T_CHALK);
     build_problem_();
   }
-  // A problem worth support seeing, on one line just above the page dots, as the board has it.
+  // A problem worth support seeing, on one line near the foot of the face.
   void build_problem_() {
     if (status_ != nullptr) return;
     status_ = mk_label(root_, margin_, 424, 480 - 2 * margin_, 20, F(g_fonts.mono15), T_CHALK50, "");
@@ -631,11 +630,11 @@ class PageView {
 // ---- clock: always page one. The short date and a breathing dot on the strip, the time and the
 // long date in the middle, and at the foot the next thing in the diary with the temperature.
 //
-// Geometry, from ClockFace in the design system: 24 px of padding, a 28 px strip at the top and
-// a foot row that ends 16 px above the page dots. The hairline sits at 403, the foot row runs
-// 419 to 443, and the middle block is centred between the strip (ending at 52) and the hairline.
-// The numerals stand 102 px tall and start 20 px below their label's top, which is what puts the
-// clock label at 146 and the long date under it at 274.
+// Geometry, from ClockFace in the design system with 16 px of padding all round: a 28 px strip
+// at the top and a foot row that ends on the bottom margin, under the page dots when those show.
+// The hairline sits at 424, the foot row runs 440 to 464, and the middle block is centred between
+// the strip (ending at 44) and the hairline. The numerals stand 102 px tall and start 20 px below
+// their label's top, which is what puts the clock label at 152 and the long date under it at 280.
 class ClockView : public PageView {
  public:
   explicit ClockView(lv_obj_t *parent) : PageView(parent, "__clock", 'c') {
@@ -648,18 +647,18 @@ class ClockView : public PageView {
 
     // The clock font holds digits and a colon and nothing else, so the label starts empty rather
     // than showing "--:--": four missing glyphs would draw as four boxes.
-    time_ = mk_label(root_, 0, 146, 480, 0, F(g_fonts.clock132), T_CHALK, "");
+    time_ = mk_label(root_, 0, 152, 480, 0, F(g_fonts.clock132), T_CHALK, "");
     lv_obj_set_style_text_align(time_, LV_TEXT_ALIGN_CENTER, 0);
     tracked(time_, -8);
-    date_ = mk_label(root_, 24, 274, 432, 28, F(g_fonts.sans500_20), T_CHALK70, copy::CLOCK_WAITING);
+    date_ = mk_label(root_, 16, 280, 448, 28, F(g_fonts.sans500_20), T_CHALK70, copy::CLOCK_WAITING);
     lv_obj_set_style_text_align(date_, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(date_, LV_LABEL_LONG_MODE_DOTS);
 
-    rule_ = mk_rule(root_, 24, 403, 432, T_RAISED);
-    dot_ = mk_panel(root_, 24, 426, 9, 9, T_CALENDAR, LV_RADIUS_CIRCLE);
-    line_ = mk_label(root_, 45, 419, 339, 24, F(g_fonts.sans400_18), T_TIME2, "");
+    rule_ = mk_rule(root_, 16, 424, 448, T_RAISED);
+    dot_ = mk_panel(root_, 16, 447, 9, 9, T_CALENDAR, LV_RADIUS_CIRCLE);
+    line_ = mk_label(root_, 37, 440, 347, 24, F(g_fonts.sans400_18), T_TIME2, "");
     lv_label_set_long_mode(line_, LV_LABEL_LONG_MODE_DOTS);
-    temp_ = mk_label(root_, 396, 421, 60, 20, F(g_fonts.mono15), T_CHALK50, "");
+    temp_ = mk_label(root_, 404, 442, 60, 20, F(g_fonts.mono15), T_CHALK50, "");
     tracked(temp_, 1);
     lv_obj_set_style_text_align(temp_, LV_TEXT_ALIGN_RIGHT, 0);
     refresh_foot_();
@@ -752,8 +751,8 @@ class ClockView : public PageView {
                              : !doc_notice_.empty() ? doc_notice_
                                                     : problem_text_;
     if (!msg.empty()) {
-      lv_obj_set_pos(line_, 24, 419);
-      lv_obj_set_width(line_, 432);
+      lv_obj_set_pos(line_, 16, 440);
+      lv_obj_set_width(line_, 448);
       lv_label_set_text(line_, msg.c_str());
       set_tok(line_, T_CHALK70);
       set_hidden(line_, false);
@@ -762,8 +761,8 @@ class ClockView : public PageView {
       set_hidden(rule_, false);
       return;
     }
-    lv_obj_set_pos(line_, 45, 419);
-    lv_obj_set_width(line_, 339);
+    lv_obj_set_pos(line_, 37, 440);
+    lv_obj_set_width(line_, 347);
     lv_label_set_text(line_, next_text_.c_str());
     set_tok(line_, T_TIME2);
     set_hidden(line_, next_text_.empty());
@@ -941,7 +940,7 @@ class BootView {
     lv_obj_set_style_text_align(notice_, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(notice_, LV_LABEL_LONG_MODE_DOTS);
     for (int i = 0; i < STEPS; i++) {
-      steps_[i] = mk_label(root_, 24, list_y + i * (step_h + STEP_GAP), 432, step_h,
+      steps_[i] = mk_label(root_, 16, list_y + i * (step_h + STEP_GAP), 448, step_h,
                            F(g_fonts.mono16), T_PENDING, "");
       lv_obj_set_style_text_align(steps_[i], LV_TEXT_ALIGN_CENTER, 0);
       tracked(steps_[i], 1);
@@ -950,11 +949,11 @@ class BootView {
     help_ = mk_label(root_, 40, help_y, 400, help_h, F(g_fonts.sans400_18), T_CHALK70, "");
     lv_obj_set_style_text_align(help_, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(help_, LV_LABEL_LONG_MODE_WRAP);
-    detail_ = mk_label(root_, 24, detail_y, 432, meta_h, F(g_fonts.mono15), T_CHALK50, "");
+    detail_ = mk_label(root_, 16, detail_y, 448, meta_h, F(g_fonts.mono15), T_CHALK50, "");
     lv_obj_set_style_text_align(detail_, LV_TEXT_ALIGN_CENTER, 0);
     tracked(detail_, 1);
     lv_label_set_long_mode(detail_, LV_LABEL_LONG_MODE_DOTS);
-    support_ = mk_label(root_, 24, support_y, 432, meta_h, F(g_fonts.mono15), T_CHALK50, "");
+    support_ = mk_label(root_, 16, support_y, 448, meta_h, F(g_fonts.mono15), T_CHALK50, "");
     lv_obj_set_style_text_align(support_, LV_TEXT_ALIGN_CENTER, 0);
     tracked(support_, 1);
     lv_label_set_long_mode(support_, LV_LABEL_LONG_MODE_DOTS);
@@ -1173,10 +1172,10 @@ class BootView {
 
 // ---- board: the departures or arrivals template, laid out as BoardFace in the design system.
 //
-// 36 px of padding, a header whose title and clock share one baseline, then four rows. The
-// design's 22 px gap between rows would put the fourth one under the page dots, so the gap is 12
-// and only the header keeps its 22. That gives rows at 94 (raised, 76 tall), 182, 264 and 346
-// (70 tall each, ending at 416), the problem line at 424 and the dots at 459.
+// 16 px of padding all round, a header whose title and clock share one baseline, then four rows
+// with the design's 22 px gap that fill the face to the bottom margin: rows at 76 (raised, 82
+// tall), 180, 282 and 384 (80 tall each, ending at 464), with the page dots over the last one
+// while they show. A problem line has no band of its own, so it takes the fourth row's place.
 //
 // The parser keeps five rows because the document may carry five; the fifth is not drawn, and
 // nothing can long-press a row that is not on screen.
@@ -1190,7 +1189,7 @@ class BoardView : public PageView {
     const lv_font_t *tf = F(g_fonts.sans600_30), *sf = F(g_fonts.mono15);
     int clock_y = HEAD_Y + (lv_font_get_line_height(tf) - tf->base_line) -
                   (lv_font_get_line_height(sf) - sf->base_line);
-    title_ = mk_label(root_, PAD, HEAD_Y, 266, 40, tf, T_CHALK, "");
+    title_ = mk_label(root_, PAD, HEAD_Y, 306, 40, tf, T_CHALK, "");
     lv_label_set_long_mode(title_, LV_LABEL_LONG_MODE_DOTS);
     clock_ = mk_label(root_, 480 - PAD - 130, clock_y, 130, 20, sf, T_CHALK70, "");
     tracked(clock_, 1);
@@ -1199,8 +1198,10 @@ class BoardView : public PageView {
     for (int i = 0; i < ROWS_SHOWN; i++) build_row_(rows_[i], i);
     build_card_();
 
-    // A problem worth support seeing, just above the dots. Informational statuses never reach it.
+    // A problem worth support seeing, in the fourth row's place. Informational statuses never
+    // reach it.
     build_problem_();
+    lv_obj_set_y(status_, row_y(3) + (ROW_H - 20) / 2);
 
     // A tap anywhere refreshes; the row hit rects sit on top and add the long press. Neither is
     // scrollable, so a horizontal drag still reaches the carousel.
@@ -1253,6 +1254,14 @@ class BoardView : public PageView {
     if (n == 0) fill_card_(pg);
   }
 
+  // The problem line sits where the fourth row does, so that row steps aside while there is one
+  // and comes back when the problem clears or the next document arrives.
+  void set_status(const std::string &msg, bool problem) override {
+    if (!problem) return;
+    show_problem_(msg);
+    if (uids_.size() > 3) set_hidden(rows_[3].box, !msg.empty());
+  }
+
   // The clock in the header, written once a minute.
   void tick(esphome::ESPTime now) override {
     std::string hm = now.is_valid() ? g_nowhm : std::string("--:--");
@@ -1268,10 +1277,10 @@ class BoardView : public PageView {
   }
 
  private:
-  // The face's geometry, from DepartureRow: rows 408 wide inside a 36 px margin, the first one
+  // The face's geometry, from DepartureRow: rows 448 wide inside a 16 px margin, the first one
   // raised and a little taller for its heavier type.
-  static const int PAD = 36, HEAD_Y = 36, ROW_X = 36, ROW_W = 408;
-  static const int ROW0_Y = 94, ROW0_H = 76, ROW_H = 70, ROW_GAP = 12;
+  static const int PAD = 16, HEAD_Y = 16, ROW_X = 16, ROW_W = 448;
+  static const int ROW0_Y = 76, ROW0_H = 82, ROW_H = 80, ROW_GAP = 22;
 
   static int row_y(int i) {
     return i == 0 ? ROW0_Y : ROW0_Y + ROW0_H + ROW_GAP + (ROW_H + ROW_GAP) * (i - 1);
@@ -1290,21 +1299,28 @@ class BoardView : public PageView {
   void build_row_(Row &r, int i) {
     int h = row_h(i), y = row_y(i);
     bool first = i == 0;
-    int pad = first ? 14 : 12, dest_h = first ? 26 : 24;
+    // The destination and its status are centred in the row's height.
+    int dest_h = first ? 26 : 24, pad = (h - (dest_h + 2 + 20)) / 2;
     r.box = first ? mk_panel(root_, ROW_X, y, ROW_W, h, T_RAISED, 16)
                   : mk_obj(root_, ROW_X, y, ROW_W, h);
     // The third and fourth rows carry a hairline along the top, as the design has them.
     if (i >= 2) mk_rule(r.box, 0, 0, ROW_W, T_LINE);
+    // The columns are measured off ROW_W rather than written down, so the row follows the page's
+    // margin: 16 of padding at either end, a 62 px time, a 14 px gap, the platform at the far end.
+    const int rpad = 16, time_w = 62, text_x = 92, plat_w = 60, plat_x = ROW_W - rpad - plat_w;
     // No tracking on the time, as the design has it: 62 px holds "08:47" at mono 20 and not a
     // pixel more, which is what makes the column line up down the face.
-    r.time = mk_label(r.box, 16, (h - 26) / 2, 62, 26, F(g_fonts.mono20), first ? T_CHALK : T_TIME2);
-    r.dest = mk_label(r.box, 92, pad, 226, dest_h, F(first ? g_fonts.sans600_20 : g_fonts.sans500_18),
+    r.time = mk_label(r.box, rpad, (h - 26) / 2, time_w, 26, F(g_fonts.mono20),
+                      first ? T_CHALK : T_TIME2);
+    r.dest = mk_label(r.box, text_x, pad, plat_x - 14 - text_x, dest_h,
+                      F(first ? g_fonts.sans600_20 : g_fonts.sans500_18),
                       first ? T_CHALK : T_TITLE2);
     lv_label_set_long_mode(r.dest, LV_LABEL_LONG_MODE_DOTS);
-    r.status = mk_label(r.box, 92, pad + dest_h + 2, 300, 20, F(g_fonts.mono15), T_CHALK70);
+    r.status = mk_label(r.box, text_x, pad + dest_h + 2, ROW_W - rpad - text_x, 20,
+                        F(g_fonts.mono15), T_CHALK70);
     tracked(r.status, 1);
     lv_label_set_long_mode(r.status, LV_LABEL_LONG_MODE_DOTS);
-    r.plat = mk_label(r.box, 332, pad + (dest_h - 20) / 2, 60, 20, F(g_fonts.mono15),
+    r.plat = mk_label(r.box, plat_x, pad + (dest_h - 20) / 2, plat_w, 20, F(g_fonts.mono15),
                       first ? T_CHALK70 : T_CHALK50);
     tracked(r.plat, 1);
     lv_obj_set_style_text_align(r.plat, LV_TEXT_ALIGN_RIGHT, 0);
@@ -1358,8 +1374,8 @@ class BoardView : public PageView {
 
 // ---- day: the diary, laid out as DayFace in the design system.
 //
-// 24 px of padding, the strip at the top carrying the day and how much of it is left, then a
-// vertical scroller from 68 to 464 holding seven days of rows. The scroller takes vertical drags
+// 16 px of padding, the strip at the top carrying the day and how much of it is left, then a
+// vertical scroller from 60 to 464 holding seven days of rows. The scroller takes vertical drags
 // only, so a horizontal flick chains up to the carousel instead of being eaten here.
 //
 // Today's own heading is not drawn: the strip already names the day, and the face reads better
@@ -1455,9 +1471,9 @@ class AgendaView : public PageView {
   }
 
  private:
-  // The face's geometry, from DayFace and AgendaRow: rows 432 wide inside a 24 px margin, 16 of
+  // The face's geometry, from DayFace and AgendaRow: rows 448 wide inside a 16 px margin, 16 of
   // padding in the raised one and 12/16 in the rest, a 52 px time gutter and a 14 px gap after it.
-  static const int LIST_Y = 68, LIST_BOTTOM = 464, ROW_W = 432, ROW_H = 60, RAISED_H = 80;
+  static const int LIST_Y = 60, LIST_BOTTOM = 464, ROW_W = 448, ROW_H = 60, RAISED_H = 80;
   static const int GAP = 8, HEAD_H = 38, HEAD_GAP = 8, PAD = 16, TIME_W = 56, TEXT_X = 86;
   static const int DUR_W = 84;
 
@@ -1577,7 +1593,7 @@ class AgendaView : public PageView {
 
 // ---- sky: the weather face, laid out as SkyFace in the design system.
 //
-// 24 px of padding, the place and the stamp on a 28 px header, one big temperature with the day
+// 16 px of padding, the place and the stamp on a 28 px header, one big temperature with the day
 // in a line and a sentence under it, and the hours to come as a strip of bars along the bottom.
 //
 // No icons are drawn here at all: the icon webfont went with S14 and the weather set the design
@@ -1640,13 +1656,14 @@ class SkyView : public PageView {
   void tick(esphome::ESPTime now) override { tick_header_(now); }
 
  private:
-  // The face's geometry: the header ends at 52, the strip card's bottom sits on the 24 px margin
+  // The face's geometry: the header ends at 44, the strip card's bottom sits on the 16 px margin
   // and the block between them is centred on what is left.
-  static const int HEAD_BOTTOM = 52, TEXT_W = 432, GAP = 10;
-  // The strip card, from SkyFace: six columns 60 wide with 8 between them inside 16 of padding,
-  // and a bar area of 68. The card is taller than the design's 128 because a rasterised 16 px
-  // label and a 14 px one need more room than the mock's line boxes did.
-  static const int COLS = 6, COL_W = 60, COL_PITCH = 68, CARD_PAD = 16, BAR_MAX = 68;
+  static const int HEAD_BOTTOM = 44, TEXT_W = 448, GAP = 10;
+  // The strip card, from SkyFace: six columns 60 wide with 8 between them inside 24 of padding,
+  // and a bar area of 68. The six columns measure 400 on a 68 pitch, which is what centres them
+  // in the 448 card. The card is taller than the design's 128 because a rasterised 16 px label
+  // and a 14 px one need more room than the mock's line boxes did.
+  static const int COLS = 6, COL_W = 60, COL_PITCH = 68, CARD_PAD = 24, BAR_MAX = 68;
 
   struct Col {
     lv_obj_t *root = nullptr, *temp = nullptr, *bar = nullptr, *hour = nullptr;
@@ -1675,14 +1692,23 @@ class SkyView : public PageView {
   }
 
   // The focus column is the first hour at half a chance of rain or more, which is the hour the
-  // sentence is about. With nothing above half, the next hour is the one to read.
+  // sentence is about. With nothing above half, the next hour is the one to read. A bar's height
+  // is the chance of rain and its brightness the temperature: the warmest of the six slots is
+  // the full hue and the coldest a quarter of it, so the strip reads as a day warming and cooling.
   void fill_strip_(const std::vector<HourSlot> &hours) {
-    int focus = 0;
-    for (size_t i = 0; i < hours.size(); i++)
-      if (hours[i].r >= 50) {
+    int focus = 0, lo = 0, hi = 0;
+    bool any = false, found = false;
+    for (size_t i = 0; i < hours.size(); i++) {
+      if (hours[i].r >= 50 && !found) {
         focus = (int) i;
-        break;
+        found = true;
       }
+      if (hours[i].t.empty()) continue;
+      int v = atoi(hours[i].t.c_str());
+      if (!any || v < lo) lo = v;
+      if (!any || v > hi) hi = v;
+      any = true;
+    }
     for (int i = 0; i < COLS; i++) {
       Col &c = cols_[i];
       if (i >= (int) hours.size()) {
@@ -1697,8 +1723,9 @@ class SkyView : public PageView {
       if (h < 4) h = 4;
       lv_obj_set_pos(c.bar, 0, bar_top_ + BAR_MAX - h);
       lv_obj_set_height(c.bar, h);
-      int d = i > focus ? i - focus : focus - i;
-      lv_obj_set_style_opa(c.bar, d == 0 ? 255 : d == 1 ? 191 : d == 2 ? 115 : 77, 0);
+      int opa = 255;
+      if (hi > lo && !s.t.empty()) opa = 77 + (255 - 77) * (atoi(s.t.c_str()) - lo) / (hi - lo);
+      lv_obj_set_style_opa(c.bar, (lv_opa_t) opa, 0);
       label_text(c.hour, s.h);
       set_tok(c.hour, i == focus ? T_TIME2 : T_HOUR);
       set_hidden(c.root, false);
@@ -1740,7 +1767,7 @@ class SkyView : public PageView {
 
 // ---- list: the to-do face, laid out as ListFace in the design system.
 //
-// 24 px of padding, the short date and the stamp on the strip, the page's own title as an
+// 16 px of padding, the short date and the stamp on the strip, the page's own title as an
 // eyebrow, then the open items as rings. Nothing is ever ticked here: a done item never reaches
 // the document, so there is no done state to draw and nothing on this face is a control.
 class ListView : public PageView {
@@ -1805,7 +1832,7 @@ class ListView : public PageView {
  private:
   // ReminderCheck at its large size: a 60 px row with 16 of padding, a 30 px ring and 14 after
   // it, on a 12 px gap. The eyebrow takes the 16 px of air under the strip.
-  static const int EYEBROW_Y = 68, LIST_Y = 102, LIST_BOTTOM = 464, ROW_W = 432, ROW_H = 60;
+  static const int EYEBROW_Y = 60, LIST_Y = 94, LIST_BOTTOM = 464, ROW_W = 448, ROW_H = 60;
   static const int GAP = 12, PAD = 16, RING = 30, TEXT_X = 60, DUE_W = 110;
 
   struct Row {
@@ -1875,7 +1902,7 @@ class GenericView : public PageView {
   void tick(esphome::ESPTime now) override { tick_header_(now); }
 
  private:
-  static const int LIST_Y = 68, LIST_BOTTOM = 464, ROW_W = 432, ROW_H = 60, GAP = 8, PAD = 16;
+  static const int LIST_Y = 60, LIST_BOTTOM = 464, ROW_W = 448, ROW_H = 60, GAP = 8, PAD = 16;
   static const int VALUE_W = 64;
 
   struct Row {
