@@ -21,10 +21,7 @@ namespace hb {
 namespace copy {
 
 // ---------------------------------------------------------------- stamps and card labels
-// Mono, capitals, tracked: the label at the top of an empty card and its footer. Not sentences,
-// so no full stops.
-inline constexpr const char *SHOWING = "SHOWING";
-inline constexpr const char *LOADING = "LOADING";
+// Mono, capitals, tracked: the label at the top of an empty card. Not sentences, so no full stops.
 inline constexpr const char *NOTHING_DUE = "NOTHING DUE";
 inline constexpr const char *OFFLINE = "OFFLINE";
 inline constexpr const char *NOTHING_PLANNED = "NOTHING PLANNED";

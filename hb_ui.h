@@ -240,22 +240,6 @@ inline lv_obj_t *mk_card(lv_obj_t *parent, int x, int y, int w, int h) {
   return mk_panel(parent, x, y, w, h, T_CARD, 16);
 }
 
-// A Unix time as local "HH:MM", for the empty card's footer.
-inline std::string hhmm_of(uint32_t when) {
-  time_t t = (time_t) when;
-  struct tm lt;
-  localtime_r(&t, &lt);
-  char buf[8];
-  strftime(buf, sizeof buf, "%H:%M", &lt);
-  return buf;
-}
-
-// The footer of an empty card, which says how old what it stands in for is. Empty when the face
-// has never had a document, because there is nothing to be showing.
-inline std::string showing_foot(uint32_t asof) {
-  return asof == 0 ? std::string() : copy::SHOWING + (" " + hhmm_of(asof));
-}
-
 // Uppercase an ASCII string, for the strip's left label and the agenda's day headings. Document
 // text is ASCII by the time the parser is done with it, so there is nothing else to fold.
 inline std::string upper(std::string s) {
@@ -362,24 +346,17 @@ class EmptyCard {
     tracked(label_, 1);
     text_ = mk_label(root_, PAD, TEXT_Y, w - 2 * PAD, 0, F(g_fonts.sans400_18), T_CHALK70, "");
     lv_label_set_long_mode(text_, LV_LABEL_LONG_MODE_WRAP);
-    foot_ = mk_label(root_, PAD, TEXT_Y + 36, w - 2 * PAD, 20, F(g_fonts.mono15), T_CHALK50, "");
-    tracked(foot_, 1);
     set_hidden(root_, true);
   }
 
-  // The card's height follows its sentence, which is why the footer is placed after the text has
-  // been laid out and not before.
-  void set(const std::string &label, const std::string &text, const std::string &foot) {
+  // The card's height follows its sentence.
+  void set(const std::string &label, const std::string &text) {
     if (root_ == nullptr) return;
     lv_label_set_text(label_, label.c_str());
     lv_label_set_text(text_, text.c_str());
-    lv_label_set_text(foot_, foot.c_str());
-    set_hidden(foot_, foot.empty());
     set_hidden(root_, false);
     lv_obj_update_layout(root_);
-    int th = lv_obj_get_height(text_);
-    lv_obj_set_pos(foot_, PAD, TEXT_Y + th + 12);
-    lv_obj_set_height(root_, TEXT_Y + th + (foot.empty() ? 0 : 32) + PAD);
+    lv_obj_set_height(root_, TEXT_Y + lv_obj_get_height(text_) + PAD);
   }
   void hide() {
     if (root_ != nullptr) set_hidden(root_, true);
@@ -389,12 +366,12 @@ class EmptyCard {
   // 24 of padding, the 20 px label and the design's 12 px gap.
   static const int PAD = 24, TEXT_Y = 56;
 
-  lv_obj_t *root_ = nullptr, *label_ = nullptr, *text_ = nullptr, *foot_ = nullptr;
+  lv_obj_t *root_ = nullptr, *label_ = nullptr, *text_ = nullptr;
 };
 
 // ---------------------------------------------------------------- chrome
 // The band across the top of every face: a short line on the left, optionally with a hue dot in
-// front of it, and a stamp or a time on the right. 28 px tall, inset by the face's margin.
+// front of it, and the time on the right. 28 px tall, inset by the face's margin.
 class StatusStrip {
  public:
   void build(lv_obj_t *parent, int margin) {
@@ -1335,7 +1312,7 @@ class BoardView : public PageView {
   }
 
   // The one card an empty or unreachable board shows, where the first row would be. Its height
-  // follows its sentence, which is why the footer is positioned after the text has been laid out.
+  // follows its sentence.
   void build_card_() {
     card_ = mk_panel(root_, ROW_X, ROW0_Y, ROW_W, CARD_TEXT_Y + 24 + 24, T_DONEBG, 20);
     set_hidden(card_, true);
@@ -1343,8 +1320,6 @@ class BoardView : public PageView {
     tracked(card_label_, 1);
     card_text_ = mk_label(card_, 24, CARD_TEXT_Y, ROW_W - 48, 0, F(g_fonts.sans400_18), T_CHALK70, "");
     lv_label_set_long_mode(card_text_, LV_LABEL_LONG_MODE_WRAP);
-    card_foot_ = mk_label(card_, 24, CARD_TEXT_Y + 36, ROW_W - 48, 20, F(g_fonts.mono15), T_CHALK50, "");
-    tracked(card_foot_, 1);
   }
 
   void fill_card_(const Page &pg) {
@@ -1359,14 +1334,9 @@ class BoardView : public PageView {
                                        : copy::BOARD_NONE_DUE;
     lv_label_set_text(card_label_, missing ? copy::OFFLINE : copy::NOTHING_DUE);
     lv_label_set_text(card_text_, sentence);
-    std::string foot = missing ? std::string() : showing_foot(pg.asof);
-    lv_label_set_text(card_foot_, foot.c_str());
-    set_hidden(card_foot_, foot.empty());
     set_hidden(card_, false);
     lv_obj_update_layout(card_);
-    int th = lv_obj_get_height(card_text_);
-    lv_obj_set_pos(card_foot_, 24, CARD_TEXT_Y + th + 12);
-    lv_obj_set_height(card_, CARD_TEXT_Y + th + (foot.empty() ? 0 : 32) + 24);
+    lv_obj_set_height(card_, CARD_TEXT_Y + lv_obj_get_height(card_text_) + 24);
   }
 
   static void touch_cb_(lv_event_t *e) { emit("TOUCH"); }
@@ -1380,7 +1350,7 @@ class BoardView : public PageView {
 
   Row rows_[ROWS_SHOWN];
   lv_obj_t *title_ = nullptr, *clock_ = nullptr;
-  lv_obj_t *card_ = nullptr, *card_label_ = nullptr, *card_text_ = nullptr, *card_foot_ = nullptr;
+  lv_obj_t *card_ = nullptr, *card_label_ = nullptr, *card_text_ = nullptr;
   std::vector<std::string> uids_;
   std::string last_hm_;
   bool arrivals_ = false;
@@ -1415,7 +1385,6 @@ class AgendaView : public PageView {
 
   void apply(const Page &pg) override {
     events_ = pg.events;
-    asof_ = pg.asof;
     render();
   }
 
@@ -1482,7 +1451,7 @@ class AgendaView : public PageView {
     }
     // Seven days with nothing in them is a result, not a failure. The card says so in the same
     // shape the board's empty state uses.
-    empty_.set(copy::NOTHING_PLANNED, copy::AGENDA_EMPTY, showing_foot(asof_));
+    empty_.set(copy::NOTHING_PLANNED, copy::AGENDA_EMPTY);
   }
 
  private:
@@ -1604,7 +1573,6 @@ class AgendaView : public PageView {
   // The day the strip names, as the tick last worked it out, and the day after today, which is
   // what tells a "TOMORROW" heading from a weekday one.
   std::string day_, short_day_, last_hm_, tomorrow_;
-  uint32_t asof_ = 0;
 };
 
 // ---- sky: the weather face, laid out as SkyFace in the design system.
@@ -1633,7 +1601,6 @@ class SkyView : public PageView {
   }
 
   void apply(const Page &pg) override {
-    asof_ = pg.asof;
     strip_.set_left(pg.place.empty() ? std::string(copy::WEATHER) : upper(pg.place), T_WEATHER);
 
     std::string temp = pg.temp, feels = pg.feels, head = pg.head, sent = pg.sent;
@@ -1651,7 +1618,7 @@ class SkyView : public PageView {
     }
     if (temp.empty()) {
       for (lv_obj_t *o : {hero_, feels_, head_, sent_, card_}) set_hidden(o, true);
-      empty_.set(copy::OFFLINE, copy::SKY_NO_FORECAST, showing_foot(asof_));
+      empty_.set(copy::OFFLINE, copy::SKY_NO_FORECAST);
       return;
     }
     empty_.hide();
@@ -1769,7 +1736,6 @@ class SkyView : public PageView {
   Col cols_[COLS];
   EmptyCard empty_;
   int card_h_ = 0, card_y_ = 0, bar_top_ = 0;
-  uint32_t asof_ = 0;
 };
 
 // ---- list: the to-do face, laid out as ListFace in the design system.
@@ -1818,7 +1784,7 @@ class ListView : public PageView {
       empty_.hide();
       return;
     }
-    empty_.set(copy::ALL_DONE, copy::LIST_EMPTY, showing_foot(pg.asof));
+    empty_.set(copy::ALL_DONE, copy::LIST_EMPTY);
   }
 
   // The strip carries the short date, as the clock's does, and the time owns the other end.
