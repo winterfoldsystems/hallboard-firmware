@@ -2016,7 +2016,10 @@ class PageHost {
     raise_boot_();   // the pairing view was just created on top of everything, including us
   }
 
-  void show(size_t index, bool animate) {
+  // `dir` is the way the household swiped: 1 forward (a flick to the left), -1 back, 0 to go by
+  // the index. A step that wraps says which way it went, because the index cannot: the clock is
+  // page one, and coming round to it from the last page is still a step forward.
+  void show(size_t index, bool animate, int step_dir = 0) {
     if (views_.empty()) return;
     if (index >= views_.size()) index = views_.size() - 1;
 #if HB_CAROUSEL
@@ -2036,7 +2039,8 @@ class PageHost {
     }
     lv_obj_t *out = views_[cur_]->root();
     lv_obj_t *in = views_[index]->root();
-    int dir = index > cur_ ? -1 : 1;  // moving forward slides the old page off to the left
+    bool forward = step_dir != 0 ? step_dir > 0 : index > cur_;
+    int dir = forward ? -1 : 1;  // moving forward slides the old page off to the left
     cur_ = index;
     set_hidden(in, false);
     lv_anim_t a;
@@ -2067,7 +2071,7 @@ class PageHost {
     int n = (int) views_.size();
     int idx = ((int) cur_ + delta) % n;
     if (idx < 0) idx += n;
-    show((size_t) idx, true);
+    show((size_t) idx, true, delta);
   }
 
   void tick(esphome::ESPTime now) {
