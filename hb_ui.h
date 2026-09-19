@@ -380,11 +380,12 @@ class StatusStrip {
     root_ = mk_obj(parent, margin, margin, w, 28);
     dot_ = mk_panel(root_, 0, 10, 9, 9, T_LIFT, LV_RADIUS_CIRCLE);
     set_hidden(dot_, true);
-    // The right label takes the last 160 px, so the left one stops ten pixels short of it.
-    left_ = mk_label(root_, 0, 4, w - 170, 22, F(g_fonts.mono15), T_CHALK70, "");
+    // The right label holds a time and takes the last 80 px, so the left one stops ten pixels
+    // short of it: room for a board title of forty characters at mono 15.
+    left_ = mk_label(root_, 0, 4, w - 90, 22, F(g_fonts.mono15), T_CHALK70, "");
     tracked(left_, 1);
     lv_label_set_long_mode(left_, LV_LABEL_LONG_MODE_DOTS);
-    right_ = mk_label(root_, w - 160, 4, 160, 22, F(g_fonts.mono15), T_CHALK70, "");
+    right_ = mk_label(root_, w - 80, 4, 80, 22, F(g_fonts.mono15), T_CHALK70, "");
     tracked(right_, 1);
     lv_obj_set_style_text_align(right_, LV_TEXT_ALIGN_RIGHT, 0);
   }
@@ -638,12 +639,7 @@ class PageView {
 class ClockView : public PageView {
  public:
   explicit ClockView(lv_obj_t *parent) : PageView(parent, "__clock", 'c') {
-    // Nothing goes on the right of the strip: the clock underneath is the time. The lilac dot
-    // breathes over four seconds, which is the whole of this face's movement.
-    strip_.build(root_, margin_);
-    strip_.set_dot(T_LIFT);
-    strip_.set_breathing(true);
-    strip_.set_left("", T_CHALK70);
+    // No strip: the clock underneath is the time and the long date under it is the date.
 
     // The clock font holds digits and a colon and nothing else, so the label starts empty rather
     // than showing "--:--": four missing glyphs would draw as four boxes.
@@ -668,7 +664,6 @@ class ClockView : public PageView {
     if (!now.is_valid()) {
       lv_label_set_text(time_, "");
       lv_label_set_text(date_, copy::CLOCK_WAITING);
-      strip_.set_left("", T_CHALK70);
       last_hm_.clear();
       return;
     }
@@ -676,7 +671,6 @@ class ClockView : public PageView {
     last_hm_ = g_nowhm;
     lv_label_set_text(time_, short_time(g_nowhm).c_str());
     lv_label_set_text(date_, date_text(now).c_str());
-    strip_.set_left(short_date(now), T_CHALK70);
   }
 
   // 24 hour without a leading zero, as the design has it: "8:41", "17:05".
@@ -695,16 +689,6 @@ class ClockView : public PageView {
     return std::string(DAYS[dow]) + " " + std::to_string((int) now.day_of_month) + " " + MONTHS[mon];
   }
 
-  // "FRI 18 SEP" for the strip, from the same tick.
-  static std::string short_date(const esphome::ESPTime &now) {
-    static const char *DAYS[] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
-    static const char *MONTHS[] = {"JAN", "FEB", "MAR", "APR", "MAY", "JUN",
-                                   "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"};
-    int dow = (int) now.day_of_week - 1;
-    int mon = (int) now.month - 1;
-    if (dow < 0 || dow > 6 || mon < 0 || mon > 11) return "";
-    return std::string(DAYS[dow]) + " " + std::to_string((int) now.day_of_month) + " " + MONTHS[mon];
-  }
 
   // The foot row's two halves, both worked out by PageHost from the document: the next thing in
   // the diary and the temperature. Either may be empty, and when both are the row goes.
@@ -1172,10 +1156,10 @@ class BootView {
 
 // ---- board: the departures or arrivals template, laid out as BoardFace in the design system.
 //
-// 16 px of padding all round, a header whose title and clock share one baseline, then four rows
-// with the design's 22 px gap that fill the face to the bottom margin: rows at 76 (raised, 82
-// tall), 180, 282 and 384 (80 tall each, ending at 464), with the page dots over the last one
-// while they show. A problem line has no band of its own, so it takes the fourth row's place.
+// 16 px of padding all round, the strip every face has, then four rows with the design's 22 px
+// gap that fill the face to the bottom margin: rows at 60 (raised, 86 tall), 168, 274 and 380
+// (84 tall each, ending at 464), with the page dots over the last one while they show. A problem
+// line has no band of its own, so it takes the fourth row's place.
 //
 // The parser keeps five rows because the document may carry five; the fifth is not drawn, and
 // nothing can long-press a row that is not on screen.
@@ -1184,16 +1168,9 @@ class BoardView : public PageView {
   static const int ROWS_SHOWN = 4;
 
   BoardView(lv_obj_t *parent, const std::string &id) : PageView(parent, id, 'b') {
-    // The header is two labels rather than a StatusStrip: the design sets the title in 30 px
-    // Figtree and sits the mono clock on its baseline, which the strip's one band cannot do.
-    const lv_font_t *tf = F(g_fonts.sans600_30), *sf = F(g_fonts.mono15);
-    int clock_y = HEAD_Y + (lv_font_get_line_height(tf) - tf->base_line) -
-                  (lv_font_get_line_height(sf) - sf->base_line);
-    title_ = mk_label(root_, PAD, HEAD_Y, 306, 40, tf, T_CHALK, "");
-    lv_label_set_long_mode(title_, LV_LABEL_LONG_MODE_DOTS);
-    clock_ = mk_label(root_, 480 - PAD - 130, clock_y, 130, 20, sf, T_CHALK70, "");
-    tracked(clock_, 1);
-    lv_obj_set_style_text_align(clock_, LV_TEXT_ALIGN_RIGHT, 0);
+    // The same strip as every other face: the board's title in the transit hue, the clock right.
+    strip_.build(root_, margin_);
+    strip_.set_dot(T_TRANSIT);
 
     for (int i = 0; i < ROWS_SHOWN; i++) build_row_(rows_[i], i);
     build_card_();
@@ -1222,9 +1199,9 @@ class BoardView : public PageView {
     // The module decides the empty-state wording. A document from a backend that does not send
     // `module` is rail, which is all there was before 1.4.0.
     module_ = pg.module;
-    // The header has room for a name, not a sentence, which is what `short` is for.
-    const std::string &head = pg.short_title.empty() ? pg.title : pg.short_title;
-    if (!head.empty()) lv_label_set_text(title_, head.c_str());
+    // "FARNCOMBE TO WATERLOO", "ARRIVALS AT FARNCOMBE", a stop's name: the backend's title as
+    // it is, at mono 15 the strip has room for all forty characters of it.
+    strip_.set_left(upper(pg.title), T_TRANSIT);
     show_problem_("");   // a document is the answer to whatever the last problem was about
     uids_.clear();
     int n = (int) pg.rows.size();
@@ -1262,13 +1239,7 @@ class BoardView : public PageView {
     if (uids_.size() > 3) set_hidden(rows_[3].box, !msg.empty());
   }
 
-  // The clock in the header, written once a minute.
-  void tick(esphome::ESPTime now) override {
-    std::string hm = now.is_valid() ? g_nowhm : std::string("--:--");
-    if (hm == last_hm_) return;
-    last_hm_ = hm;
-    lv_label_set_text(clock_, hm.c_str());
-  }
+  void tick(esphome::ESPTime now) override { tick_header_(now); }
 
   const std::string &uid_at(int i) const {
     static const std::string none;
@@ -1279,8 +1250,8 @@ class BoardView : public PageView {
  private:
   // The face's geometry, from DepartureRow: rows 448 wide inside a 16 px margin, the first one
   // raised and a little taller for its heavier type.
-  static const int PAD = 16, HEAD_Y = 16, ROW_X = 16, ROW_W = 448;
-  static const int ROW0_Y = 76, ROW0_H = 82, ROW_H = 80, ROW_GAP = 22;
+  static const int PAD = 16, ROW_X = 16, ROW_W = 448;
+  static const int ROW0_Y = 60, ROW0_H = 86, ROW_H = 84, ROW_GAP = 22;
 
   static int row_y(int i) {
     return i == 0 ? ROW0_Y : ROW0_Y + ROW0_H + ROW_GAP + (ROW_H + ROW_GAP) * (i - 1);
@@ -1365,10 +1336,8 @@ class BoardView : public PageView {
   static const int CARD_TEXT_Y = 56;
 
   Row rows_[ROWS_SHOWN];
-  lv_obj_t *title_ = nullptr, *clock_ = nullptr;
   lv_obj_t *card_ = nullptr, *card_label_ = nullptr, *card_text_ = nullptr;
   std::vector<std::string> uids_;
-  std::string last_hm_;
   bool arrivals_ = false;
 };
 
@@ -1389,6 +1358,7 @@ class AgendaView : public PageView {
 
   AgendaView(lv_obj_t *parent, const std::string &id) : PageView(parent, id, 'a') {
     strip_.build(root_, margin_);
+    strip_.set_dot(T_CALENDAR);
     list_ = mk_obj(root_, 0, LIST_Y, 480, LIST_BOTTOM - LIST_Y);
     lv_obj_add_flag(list_, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(list_, LV_OBJ_FLAG_CLICKABLE);
@@ -1401,6 +1371,8 @@ class AgendaView : public PageView {
 
   void apply(const Page &pg) override {
     events_ = pg.events;
+    // The calendar's name, which the parser puts in the page title.
+    strip_.set_left(upper(pg.title), T_CALENDAR);
     render();
   }
 
@@ -1411,7 +1383,6 @@ class AgendaView : public PageView {
     if (g_nowhm == last_hm_ && day_ == long_day(now)) return;
     last_hm_ = g_nowhm;
     day_ = long_day(now);
-    short_day_ = long_day(now, true);
     render();
   }
 
@@ -1425,13 +1396,11 @@ class AgendaView : public PageView {
     // The next thing today: the first timed event still to come, which is the one the face
     // raises. An all-day event is never it; it has no time to count down to.
     const AgendaEvent *next = nullptr;
-    int today = 0;
     for (const auto &it : events_) {
-      if (spent_(it) || it.d != g_today) continue;
-      today++;
-      if (next == nullptr && !it.all_day) next = &it;
+      if (spent_(it) || it.d != g_today || it.all_day) continue;
+      next = &it;
+      break;
     }
-    strip_.set_left(head_text_(today), T_CALENDAR);
 
     int card = 0, head = 0, y = 0, shown = 0;
     bool after_row = false;   // a hairline goes between two resting rows and nowhere else
@@ -1489,19 +1458,6 @@ class AgendaView : public PageView {
     return !e.all_day && e.d == g_today && !g_nowhm.empty() && e.u.size() == 5 && e.u <= g_nowhm;
   }
 
-  // "FRIDAY 18 · 4 EVENTS", or what is left of it before the clock has been set. The strip's
-  // left half holds 26 mono characters; past that the day goes to its short form rather than
-  // the line being cut, which is only ever a long weekday with nothing on it.
-  std::string head_text_(int today) const {
-    std::string count = today == 0   ? copy::NOTHING_TODAY
-                        : today == 1 ? copy::ONE_EVENT
-                                     : std::to_string(today) + copy::EVENTS;
-    if (day_.empty()) return count;
-    std::string line = day_ + " \xC2\xB7 " + count;
-    // The middle dot is two bytes and one character, so the count is off by one either way.
-    if (line.size() - 1 > 26) line = short_day_ + " \xC2\xB7 " + count;
-    return line;
-  }
   std::string heading_(const AgendaEvent &e) const {
     if (!tomorrow_.empty() && e.d == tomorrow_) return copy::TOMORROW_HEAD;
     return long_weekday(e.w);
@@ -1588,7 +1544,7 @@ class AgendaView : public PageView {
   std::vector<AgendaEvent> events_;
   // The day the strip names, as the tick last worked it out, and the day after today, which is
   // what tells a "TOMORROW" heading from a weekday one.
-  std::string day_, short_day_, last_hm_, tomorrow_;
+  std::string day_, last_hm_, tomorrow_;
 };
 
 // ---- sky: the weather face, laid out as SkyFace in the design system.
@@ -1602,6 +1558,7 @@ class SkyView : public PageView {
  public:
   SkyView(lv_obj_t *parent, const std::string &id) : PageView(parent, id, 'g') {
     strip_.build(root_, margin_);
+    strip_.set_dot(T_WEATHER);
     // The hero is auto-width so `feels` can be put beside it, on its baseline, once the number
     // is known. The degree sign is a real glyph in the 88 px face, not a drawn ring.
     hero_ = mk_label(root_, margin_, HEAD_BOTTOM, 0, 0, F(g_fonts.hero88), T_CHALK, "");
@@ -1776,9 +1733,8 @@ class ListView : public PageView {
 
   ListView(lv_obj_t *parent, const std::string &id) : PageView(parent, id, 'g') {
     strip_.build(root_, margin_);
-    eyebrow_ = mk_label(root_, margin_, EYEBROW_Y, ROW_W, 22, F(g_fonts.mono16), T_REMINDERS, "");
-    tracked(eyebrow_, 1);
-    lv_label_set_long_mode(eyebrow_, LV_LABEL_LONG_MODE_DOTS);
+    strip_.set_dot(T_REMINDERS);
+    strip_.set_left(copy::TODO_LIST, T_REMINDERS);
     // Eight rows are more than the screen holds, so they scroll, vertically only, as the diary's
     // do: a horizontal flick is the carousel's.
     list_ = mk_obj(root_, 0, LIST_Y, 480, LIST_BOTTOM - LIST_Y);
@@ -1792,7 +1748,6 @@ class ListView : public PageView {
   }
 
   void apply(const Page &pg) override {
-    label_text(eyebrow_, upper(pg.title));
     for (auto &r : rows_) set_hidden(r.box, true);
     int n = (int) pg.grows.size();
     if (n > MAX_ROWS) n = MAX_ROWS;
@@ -1814,13 +1769,7 @@ class ListView : public PageView {
     empty_.set(copy::ALL_DONE, copy::LIST_EMPTY);
   }
 
-  // The strip carries the short date, as the clock's does, and the time owns the other end.
-  void tick(esphome::ESPTime now) override {
-    tick_header_(now);
-    if (g_nowhm == last_hm_) return;
-    last_hm_ = g_nowhm;
-    strip_.set_left(now.is_valid() ? ClockView::short_date(now) : std::string(), T_CHALK70);
-  }
+  void tick(esphome::ESPTime now) override { tick_header_(now); }
 
   // A ring is a border colour, which no shared style reaches: it is set by value when a row is
   // built, so every row already on the face has to be told when the palette turns over.
@@ -1832,7 +1781,7 @@ class ListView : public PageView {
  private:
   // ReminderCheck at its large size: a 60 px row with 16 of padding, a 30 px ring and 14 after
   // it, on a 12 px gap. The eyebrow takes the 16 px of air under the strip.
-  static const int EYEBROW_Y = 60, LIST_Y = 94, LIST_BOTTOM = 464, ROW_W = 448, ROW_H = 60;
+  static const int LIST_Y = 60, LIST_BOTTOM = 464, ROW_W = 448, ROW_H = 60;
   static const int GAP = 12, PAD = 16, RING = 30, TEXT_X = 60, DUE_W = 110;
 
   struct Row {
@@ -1862,10 +1811,9 @@ class ListView : public PageView {
   }
   static void touch_cb_(lv_event_t *e) { emit("TOUCH"); }
 
-  lv_obj_t *eyebrow_ = nullptr, *list_ = nullptr;
+  lv_obj_t *list_ = nullptr;
   EmptyCard empty_;
   std::vector<Row> rows_;
-  std::string last_hm_;
 };
 
 // ---- generic: the module template, for a module with no face of its own. Up to eight rows of a

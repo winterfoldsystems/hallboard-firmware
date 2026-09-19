@@ -29,9 +29,7 @@ inline constexpr const char *ALL_DONE = "ALL DONE";
 // The weather strip's left label when the document named no place.
 inline constexpr const char *WEATHER = "WEATHER";
 // The diary strip's right half, and the heading the day after today gets.
-inline constexpr const char *NOTHING_TODAY = "NOTHING TODAY";
-inline constexpr const char *ONE_EVENT = "1 EVENT";
-inline constexpr const char *EVENTS = " EVENTS";
+inline constexpr const char *TODO_LIST = "TO-DO LIST";
 inline constexpr const char *TOMORROW_HEAD = "TOMORROW";
 
 // ---------------------------------------------------------------- empty states
