@@ -31,6 +31,7 @@ esphome:
   name: hallboard
   friendly_name: HallBoard
   includes:
+    - hb_copy.h
     - hb_tokens.h
     - hb_ui.h
     - hb_parse.h
@@ -66,7 +67,6 @@ esphome:
           hb::g_fonts.mono16 = id(mono400_16)->get_lv_font();
           hb::g_fonts.mono15 = id(mono400_15)->get_lv_font();
           hb::g_fonts.mono14 = id(mono400_14)->get_lv_font();
-          hb::g_fonts.icon = id(icon_font)->get_lv_font();
           hb::g_event =[](const std::string &msg) { id(ev).execute(msg); };
           hb::g_host.attach(id(content_page)->obj, "${fw_version}");
           // The backlight is off from power-on (hardware.yaml), because until LVGL has drawn once
@@ -88,7 +88,7 @@ esphome:
           if (running != nullptr && esp_ota_get_state_partition(running, &ota_state) == ESP_OK &&
               ota_state == ESP_OTA_IMG_PENDING_VERIFY) {
             ESP_LOGI("hb", "running a pending image, version ${fw_version}");
-            hb::g_host.set_notice("Updated to ${fw_version}");
+            hb::g_host.set_notice(std::string(hb::copy::UPDATED_TO) + "${fw_version}.");
             id(fw_notice_until) = millis() + 60000;
           }
           // The other outcome: an image was installed, the board rebooted into it, and it never
@@ -106,9 +106,9 @@ esphome:
           tb::g_fetcher.start();
           wifi::global_wifi_component->set_keep_scan_results(true);
           if (wifi::global_wifi_component->has_sta()) {
-            hb::g_host.set_status("Connecting to Wi-Fi...");
+            hb::g_host.set_status(hb::copy::WIFI_CONNECTING);
           } else {
-            hb::g_host.set_status("No Wi-Fi network saved. Hold the side button.", true);
+            hb::g_host.set_status(hb::copy::WIFI_NONE_SAVED, true);
             id(ev).execute("BUTTONLONG");
           }
           // A factory reset is a very long hold; the 0.7 to 6 s band in hardware.yaml opens Wi-Fi
@@ -177,18 +177,18 @@ wifi:
     - lambda: |-
         char ssid[wifi::SSID_BUFFER_SIZE];
         std::string name = wifi::global_wifi_component->wifi_ssid_to(ssid);
-        std::string msg = "Connected to " + name + ".";
+        std::string msg = hb::copy::WIFI_CONNECTED_TO + name + ".";
         lv_label_set_text(id(wifi_status), msg.c_str());
         hb::g_host.set_network(name);
-        hb::g_host.set_status(id(claimed) ? "Wi-Fi connected, fetching the board..."
-                                          : "Wi-Fi connected, pairing...");
+        hb::g_host.set_status(id(claimed) ? hb::copy::CONNECTED_FETCHING
+                                          : hb::copy::CONNECTED_PAIRING);
         if (id(lv).get_current_page() == 2) id(lv).show_page(0, LV_SCR_LOAD_ANIM_NONE, 0);
         // Pair (or poll the screen) on the next scheduler tick.
         id(backoff_ms) = 0;
         id(next_poll_at) = millis();
   on_disconnect:
     - lambda: |-
-        hb::g_host.set_status("Wi-Fi has dropped. Hold the side button.", true);
+        hb::g_host.set_status(hb::copy::WIFI_DROPPED, true);
 
 improv_serial:
 
@@ -224,9 +224,10 @@ globals:
   - {id: next_poll_at, type: uint32_t, initial_value: '0'}
   - {id: last_manual_refresh, type: uint32_t, initial_value: '0'}
   - {id: backoff_ms, type: uint32_t, initial_value: '0'}   # 0, then 30 s doubling to 5 min
-  # Local "HH:MM" of the first failure of the current outage, so the status line can say how long
-  # it has been going on. Cleared the moment a request succeeds.
-  - {id: outage_since, type: std::string}
+  # Local "HH:MM" of the last screen fetch that worked, which is the age of what is still on the
+  # wall. Every "cannot reach" sentence ends with it, so the household is told what they are
+  # looking at rather than what went wrong; the error code goes to the log.
+  - {id: last_good_hm, type: std::string}
   # The POSIX TZ string last handed to the clock, so a document only changes it when it changes.
   - {id: applied_tz, type: std::string}
   - {id: cur_board, type: int, restore_value: true, initial_value: '0'}   # carousel index, restored across boots
@@ -285,13 +286,13 @@ script:
             for (auto* b : nb) lv_obj_add_flag(b, LV_OBJ_FLAG_HIDDEN);
             esp_err_t err = tb::wifi_scan_begin();
             if (err == ESP_OK) {
-              lv_label_set_text(id(wifi_status), "Looking for networks.");
+              lv_label_set_text(id(wifi_status), hb::copy::WIFI_SCANNING);
               id(scan_at) = millis() + 4000;
             } else {
               // The driver's reason is for the log, not for the wall: the only thing to do on
               // screen is tap the button again.
               ESP_LOGW("hb", "Wi-Fi scan failed: %s", esp_err_to_name(err));
-              lv_label_set_text(id(wifi_status), "Scan failed. Tap Scan again.");
+              lv_label_set_text(id(wifi_status), hb::copy::WIFI_SCAN_FAILED);
             }
           };
 
@@ -310,7 +311,8 @@ script:
             int n = atoi(msg.c_str() + 4);
             if (n < 0 || n >= (int) id(net_names).size()) return;
             id(pw_ssid) = id(net_names)[n];
-            lv_label_set_text(id(wifi_pw_title), ("Password for " + id(pw_ssid)).c_str());
+            lv_label_set_text(id(wifi_pw_title),
+                              (hb::copy::WIFI_PASSWORD_FOR + id(pw_ssid)).c_str());
             lv_textarea_set_text(id(pw_ta), "");
             id(lv).show_page(3, LV_SCR_LOAD_ANIM_NONE, 0);
           } else if (msg == "WIFICONNECT") {
@@ -318,8 +320,9 @@ script:
             ESP_LOGI("hb", "saving Wi-Fi credentials");
             wifi::global_wifi_component->save_wifi_sta(id(pw_ssid), pw);
             lv_textarea_set_text(id(pw_ta), "");
-            lv_label_set_text(id(wifi_status), ("Connecting to " + id(pw_ssid) + ".").c_str());
-            hb::g_host.set_status("Connecting to " + id(pw_ssid) + "...");
+            std::string msg = hb::copy::WIFI_CONNECTING_TO + id(pw_ssid) + ".";
+            lv_label_set_text(id(wifi_status), msg.c_str());
+            hb::g_host.set_status(msg);
             id(lv).show_page(2, LV_SCR_LOAD_ANIM_NONE, 0);
           } else if (msg == "CANCEL") {
             // Close on either Wi-Fi page. The typed password is cleared rather than left in the
@@ -344,31 +347,43 @@ script:
             if (bv == nullptr) return;
             const std::string& uid = bv->uid_at(atoi(msg.c_str() + 5));
             if (uid.empty()) return;
-            lv_label_set_text(id(detail_hdr), "Loading the calling points.");
+            lv_label_set_text(id(detail_hdr), hb::copy::DETAIL_LOADING);
             lv_label_set_text(id(detail_body), "");
             id(lv).show_page(1, LV_SCR_LOAD_ANIM_NONE, 0);
             id(detail_until) = millis() + 60000;
             id(fetch_detail).execute(uid);
           }
 
-  # ---- backlight: the document's day brightness, the night window, and the two-minute lift a
-  # touch during the night gives it. One second of transition either way.
+  # ---- backlight and palette: the document's day brightness, the night window, and the two-minute
+  # lift a touch during the night gives it. One second of transition either way.
+  #
+  # This script is the one place that decides whether the board is in its night, so the night
+  # palette is switched here as well: the window comes from the household's settings in the portal
+  # and the lift from the button, and the light and the colours must never disagree about which of
+  # the two it is. Runs on a document, on a touch, on the time sync and every 60 s.
   - id: apply_brightness
     then:
       - lambda: |-
           int want = id(day_brightness);
+          bool night = false;
           if (id(night_on)) {
             auto t = id(sntp_time).now();
             if (t.is_valid()) {
               int mins = t.hour * 60 + t.minute;
               int from = id(night_from), to = id(night_to);
-              bool night = from < to ? (mins >= from && mins < to) : (mins >= from || mins < to);
+              night = from < to ? (mins >= from && mins < to) : (mins >= from || mins < to);
               if (night) want = id(night_brightness);
             }
           }
-          if (want != id(day_brightness) && id(night_lift_until) &&
-              (int32_t) (millis() - id(night_lift_until)) < 0)
-            want = id(day_brightness);
+          // A press or a tap lifts the board out of the night for two minutes, so it can be read
+          // in a dark hall: full brightness and the day palette, then back down on its own.
+          bool lifted = night && id(night_lift_until) &&
+                        (int32_t) (millis() - id(night_lift_until)) < 0;
+          if (lifted) want = id(day_brightness);
+          // Before the early return below: the brightness can be unchanged (the two levels are
+          // the same, or the lift put it back) while the palette still has to move. set_night is
+          // itself a no-op when the state has not changed, so the 60 s tick costs nothing.
+          hb::g_host.set_night(night && !lifted);
           if (want < 0) want = 0;
           if (want > 100) want = 100;
           if (want == id(applied_brightness)) return;
@@ -432,7 +447,7 @@ script:
       - lambda: |-
           ESP_LOGW("hb", "factory reset: erasing saved settings, restarting");
           hb::g_host.set_unpaired("");
-          hb::g_host.set_status("Forgetting this device and restarting...");
+          hb::g_host.set_status(hb::copy::FORGETTING);
           esphome::global_preferences->reset();
       - delay: 1500ms
       - lambda: |-
@@ -523,7 +538,7 @@ script:
                   id(fw_notice_until) = 0;
                   ESP_LOGI("hb", "installing firmware %s, %u bytes", id(fw_offered).c_str(),
                            (unsigned) id(fw_size));
-                  hb::g_host.set_notice("Updating firmware 0%");
+                  hb::g_host.set_notice(hb::copy::updating(id(fw_offered), 0));
                 }
               } else if (!id(fw_have_offer) && id(fw_check_at) &&
                          (int32_t) (millis() - id(fw_check_at)) >= 0) {
@@ -540,10 +555,9 @@ script:
           tb::Result r;
           if (!tb::g_fetcher.poll(r)) return;
           auto now = id(sntp_time).now();
-          // Before SNTP has synced there is no time to quote, so the clause is simply left off:
-          // "at --:--" told nobody anything.
+          // Before SNTP has synced there is no time to quote. A sentence that would have ended
+          // with one simply ends early: "Showing --:--" told nobody anything.
           std::string nowstr = now.is_valid() ? now.strftime("%H:%M") : "";
-          std::string at = nowstr.empty() ? "" : " at " + nowstr;
           // Status codes and byte counts only: never the secret, the document, or the ETag.
           ESP_LOGI("hb", "job %d: HTTP %d, %u bytes", (int) r.kind, r.status, (unsigned) r.body.size());
 
@@ -568,13 +582,19 @@ script:
 
           if (r.kind == tb::JOB_DETAIL) {
             if (!id(detail_until)) return;   // user already left the detail page
+            // A network error, an HTTP status and an answer that would not parse are three
+            // things to the log and one thing to whoever is standing at the board.
             if (r.status != 200) {
-              lv_label_set_text(id(detail_body), (r.status < 0 ? std::string("Network error loading details")
-                                                               : "Could not load details (HTTP " + std::to_string(r.status) + ")").c_str());
+              ESP_LOGW("hb", "calling points: HTTP %d", r.status);
+              lv_label_set_text(id(detail_body), hb::copy::DETAIL_FAILED);
               return;
             }
             std::string hdr, text;
-            if (!tb::parse_service(r.body, hdr, text)) { lv_label_set_text(id(detail_body), "Could not read details"); return; }
+            if (!tb::parse_service(r.body, hdr, text)) {
+              ESP_LOGW("hb", "calling points: could not be read");
+              lv_label_set_text(id(detail_body), hb::copy::DETAIL_FAILED);
+              return;
+            }
             lv_label_set_text(id(detail_hdr), hdr.c_str());
             lv_label_set_text(id(detail_body), text.c_str());
             return;
@@ -606,7 +626,7 @@ script:
             id(fw_installing) = false;
             id(fw_pct_shown) = -1;
             if (r.status == 200) {
-              hb::g_host.set_notice("Updating firmware 100%");
+              hb::g_host.set_notice(hb::copy::updating(r.tag, 100));
               // Written before the reboot below, and restored on the next boot whichever slot the
               // bootloader picks. The restoring global is saved within a second of changing and
               // again by the shutdown hooks, and the reboot is at least one backend round trip
@@ -618,7 +638,8 @@ script:
               ESP_LOGI("hb", "firmware %s installed, restarting", r.tag.c_str());
             } else {
               hb::g_host.set_notice("");
-              hb::g_host.set_status("Update failed (" + r.err + ")", true);
+              // The reason is in the log line below; the wall gets the sentence.
+              hb::g_host.set_status(hb::copy::UPDATE_FAILED, true);
               id(fw_result_body) = std::string("{\"version\":\"") + r.tag +
                                    "\",\"ok\":false,\"error\":\"" + r.err + "\"}";
               ESP_LOGW("hb", "firmware %s failed: %s", r.tag.c_str(), r.err.c_str());
@@ -637,31 +658,29 @@ script:
 
           if (r.status == 429) {
             id(next_poll_at) = millis() + 30000;
-            hb::g_host.set_status("Rate limited, retrying", true);
+            hb::g_host.set_status(hb::copy::RATE_LIMITED, true);
             return;
           }
           if (r.status < 0 || r.status >= 500) {
-            if (id(outage_since).empty() && !nowstr.empty()) id(outage_since) = nowstr;
             // While the boot sequence is still up, retry in 5 s rather than 30 so the help line
             // appears while somebody is still watching the screen.
             uint32_t first = hb::g_host.booting() ? 5000 : 30000;
             id(backoff_ms) = id(backoff_ms) ? std::min<uint32_t>(id(backoff_ms) * 2, 300000) : first;
             id(next_poll_at) = millis() + id(backoff_ms);
-            std::string m = "Backend unreachable";
-            if (!id(outage_since).empty()) m += " since " + id(outage_since);
-            if (!r.err.empty()) m += " (" + r.err + ")";
-            hb::g_host.set_status(m, true);
+            ESP_LOGW("hb", "backend unreachable: HTTP %d, %s", r.status,
+                     r.err.empty() ? "no reason given" : r.err.c_str());
+            hb::g_host.set_status(hb::copy::with_showing(hb::copy::CANT_REACH, id(last_good_hm)),
+                                  true);
             return;
           }
           id(backoff_ms) = 0;
-          id(outage_since).clear();
 
           if (r.kind == tb::JOB_PAIR) {
             bool cl = false; std::string code; uint32_t expires = 900, poll = 10;
             if (r.status != 200 || !tb::parse_pair(r.body, cl, code, expires, poll)) {
               ESP_LOGW("hb", "pair/begin failed: HTTP %d", r.status);
               id(next_poll_at) = millis() + 30000;
-              hb::g_host.set_status("Pairing failed" + at, true);
+              hb::g_host.set_status(hb::copy::PAIR_FAILED, true);
               return;
             }
             if (cl) {
@@ -693,7 +712,7 @@ script:
               id(pair_code).clear();
               id(pair_expires_at) = 0;
               id(next_poll_at) = millis();   // fetch the screen document straight away
-              hb::g_host.set_status("Paired, fetching the board...");
+              hb::g_host.set_status(hb::copy::PAIRED_FETCHING);
             } else {
               id(next_poll_at) = millis() + poll * 1000UL;
               // An answer while unpaired proves the boot as well as a document does.
@@ -714,16 +733,26 @@ script:
           uint32_t next = r.poll_after ? r.poll_after : 60;
           if (r.poll_after) ESP_LOGD("hb", "poll-after %u s", (unsigned) r.poll_after);
           id(next_poll_at) = millis() + next * 1000UL;
-          if (r.status == 304) return;   // unchanged: keep showing the last document
+          if (r.status == 304) {
+            // Unchanged, so what is on the wall is current: keep showing it and say so is still
+            // the answer if the next fetch fails.
+            if (!nowstr.empty()) id(last_good_hm) = nowstr;
+            return;
+          }
           if (r.status != 200) {
-            hb::g_host.set_status("HTTP " + std::to_string(r.status) + at, true);
+            ESP_LOGW("hb", "screen fetch: HTTP %d", r.status);
+            hb::g_host.set_status(hb::copy::with_showing(hb::copy::BACKEND_ERROR,
+                                                         id(last_good_hm)), true);
             return;
           }
           hb::Document doc;
           if (!tb::parse_screen(r.body, doc)) {
-            hb::g_host.set_status("Could not read the screen document" + at, true);
+            ESP_LOGW("hb", "screen document could not be read");
+            hb::g_host.set_status(hb::copy::with_showing(hb::copy::CANT_READ_PAGES,
+                                                         id(last_good_hm)), true);
             return;
           }
+          if (!nowstr.empty()) id(last_good_hm) = nowstr;
           if (!r.etag.empty()) id(screen_etag) = r.etag;
           hb::g_host.set_document(doc);
           id(confirm_boot).execute();   // a rendered document is what a good boot means here
@@ -808,7 +837,7 @@ interval:
             int pct = tb::g_ota_pct.load();
             if (pct >= 0 && pct != id(fw_pct_shown)) {
               id(fw_pct_shown) = pct;
-              hb::g_host.set_notice("Updating firmware " + std::to_string(pct) + "%");
+              hb::g_host.set_notice(hb::copy::updating(id(fw_offered), pct));
             }
           }
           if (id(fw_reboot_at) && (int32_t) (millis() - id(fw_reboot_at)) >= 0) {
@@ -837,11 +866,11 @@ interval:
                 lv_obj_add_flag(nb[i], LV_OBJ_FLAG_HIDDEN);
               }
             }
-            std::string st = nets.empty() ? "No networks found. Tap Scan again."
-                                          : "Tap your network.";
+            std::string st = nets.empty() ? hb::copy::WIFI_NO_NETWORKS : hb::copy::WIFI_PICK;
             if (wifi::global_wifi_component->is_connected()) {
               char ssid[wifi::SSID_BUFFER_SIZE];
-              st += std::string(" Now on ") + wifi::global_wifi_component->wifi_ssid_to(ssid) + ".";
+              st += std::string(hb::copy::WIFI_NOW_ON) +
+                    wifi::global_wifi_component->wifi_ssid_to(ssid) + ".";
             }
             lv_label_set_text(id(wifi_status), st.c_str());
           }

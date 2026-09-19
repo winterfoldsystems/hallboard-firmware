@@ -39,7 +39,6 @@ lvgl:
         - label: {id: anchor_mono400_16, x: 0, y: 0, width: 1, height: 1, text: "", text_font: mono400_16, hidden: true}
         - label: {id: anchor_mono400_15, x: 0, y: 0, width: 1, height: 1, text: "", text_font: mono400_15, hidden: true}
         - label: {id: anchor_mono400_14, x: 0, y: 0, width: 1, height: 1, text: "", text_font: mono400_14, hidden: true}
-        - label: {id: anchor_icon, x: 0, y: 0, width: 1, height: 1, text: "", text_font: icon_font, hidden: true}
         - qrcode: {id: anchor_qr, x: 0, y: 0, size: 20, text: "", hidden: true}
     # Page 1: the one detail sheet, the calling points for a single service. The header and the
     # body are set from hallboard.yaml; a tap anywhere closes it.
@@ -590,8 +589,9 @@ lvgl:
 # meta lines. Both come from Google Fonts at build time: `gfonts://Family@weight` asks the CSS
 # API for that weight and the API answers with a static instance of the variable font, so 500,
 # 600 and 700 are three different files and not one file rendered three ways. A family with
-# spaces in its name is written with plus signs, as the CSS API wants it.
-# The Material Design Icons webfont is checked in under fonts/ with its licence; S14 drops it.
+# spaces in its name is written with plus signs, as the CSS API wants it. Nothing else is
+# compiled in: the icon webfont the generic template used to draw with went with S14, and the
+# faces say what it said in type.
 #
 # Every entry has an explicit glyph list. The text sizes share one: printable ASCII plus the
 # degree sign, the middle dot the stamps separate with, both dashes and an ellipsis.
@@ -677,29 +677,3 @@ font:
     size: 14
     bpp: 4
     glyphs: *text_glyphs
-  # The twenty icons a generic page may name. See the table in hb_ui.h for the name of each.
-  - file: "fonts/materialdesignicons-webfont.ttf"
-    id: icon_font
-    size: 48
-    bpp: 4
-    glyphs:
-      - "\U000F0599"   # sun       weather-sunny
-      - "\U000F0595"   # partly    weather-partly-cloudy
-      - "\U000F0590"   # cloud     weather-cloudy
-      - "\U000F0597"   # rain      weather-rainy
-      - "\U000F0596"   # pour      weather-pouring
-      - "\U000F0598"   # snow      weather-snowy
-      - "\U000F0591"   # fog       weather-fog
-      - "\U000F0593"   # storm     weather-lightning
-      - "\U000F059D"   # wind      weather-windy
-      - "\U000F0594"   # night     weather-night
-      - "\U000F009C"   # bell      bell-outline
-      - "\U000F023D"   # flag      flag-outline
-      - "\U000F00EE"   # calendar  calendar-blank
-      - "\U000F052C"   # train     train
-      - "\U000F04DF"   # tube      subway-variant
-      - "\U000F00E7"   # bus       bus
-      - "\U000F0150"   # clock     clock-outline
-      - "\U000F05D6"   # alert     alert-circle-outline
-      - "\U000F05A9"   # wifi      wifi
-      - "\U000F0339"   # link      link-variant

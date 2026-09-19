@@ -219,7 +219,7 @@ inline bool parse_service(const std::string &body, std::string &header, std::str
     if (!text.empty()) text += "\n";
     text += line;
   }
-  if (text.empty()) text = "No calling point data";
+  if (text.empty()) text = hb::copy::DETAIL_EMPTY;
   return true;
 }
 

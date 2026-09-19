@@ -27,6 +27,7 @@
 #include "esphome/components/lvgl/lvgl_esphome.h"
 #include "esphome/core/log.h"
 #include "esphome/core/time.h"
+#include "hb_copy.h"
 #include "hb_tokens.h"
 
 namespace hb {
@@ -46,7 +47,9 @@ struct AgendaEvent {
   bool all_day = false;
 };
 
-// One row of a generic page: an icon name from the compiled set, a large value and two text lines.
+// One row of a generic page: a large value and two text lines. `icon` is still parsed, because a
+// backend older than 1.4.0 sends one, and nothing draws it: the icon font went with S14 and the
+// faces say it in type instead.
 struct GenericRow {
   std::string icon, value, a, b;
 };
@@ -110,7 +113,7 @@ inline int hhmm_to_minutes(const std::string &s) {
   return h * 60 + m;
 }
 
-// ---------------------------------------------------------------- fonts and icons
+// ---------------------------------------------------------------- fonts
 // The design system's type scale: Figtree for text, IBM Plex Mono for times, codes and meta.
 // Set once on boot from the `font:` entries in ui.yaml (hidden anchor labels there are what
 // compiles each one in); the host simulator fills the same members from TTFs.
@@ -130,7 +133,6 @@ struct FontSet {
   const lv_font_t *mono16 = nullptr;
   const lv_font_t *mono15 = nullptr;
   const lv_font_t *mono14 = nullptr;
-  const lv_font_t *icon = nullptr;       // 48 px Material Design Icons, until S7 replaces them
 };
 inline FontSet g_fonts;
 
@@ -141,41 +143,6 @@ inline const lv_font_t *F(const lv_font_t *f) { return f != nullptr ? f : LV_FON
 // Letter spacing, in whole pixels. The mono sizes need a little air, the display sizes need
 // taking in; the amounts are the design's.
 inline void tracked(lv_obj_t *o, int px) { lv_obj_set_style_text_letter_space(o, px, 0); }
-
-// The icon names the document may use, in the order docs/screen-document.md lists them, mapped to
-// Material Design Icons codepoints as UTF-8. An unknown name renders as nothing.
-struct IconEntry {
-  const char *name;
-  const char *glyph;
-};
-inline const IconEntry ICONS[] = {
-    {"sun", "\xF3\xB0\x96\x99"},       // U+F0599 weather-sunny
-    {"partly", "\xF3\xB0\x96\x95"},    // U+F0595 weather-partly-cloudy
-    {"cloud", "\xF3\xB0\x96\x90"},     // U+F0590 weather-cloudy
-    {"rain", "\xF3\xB0\x96\x97"},      // U+F0597 weather-rainy
-    {"pour", "\xF3\xB0\x96\x96"},      // U+F0596 weather-pouring
-    {"snow", "\xF3\xB0\x96\x98"},      // U+F0598 weather-snowy
-    {"fog", "\xF3\xB0\x96\x91"},       // U+F0591 weather-fog
-    {"storm", "\xF3\xB0\x96\x93"},     // U+F0593 weather-lightning
-    {"wind", "\xF3\xB0\x96\x9D"},      // U+F059D weather-windy
-    {"night", "\xF3\xB0\x96\x94"},     // U+F0594 weather-night
-    {"bell", "\xF3\xB0\x82\x9C"},      // U+F009C bell-outline
-    {"flag", "\xF3\xB0\x88\xBD"},      // U+F023D flag-outline
-    {"calendar", "\xF3\xB0\x83\xAE"},  // U+F00EE calendar-blank
-    {"train", "\xF3\xB0\x94\xAC"},     // U+F052C train
-    {"tube", "\xF3\xB0\x93\x9F"},      // U+F04DF subway-variant
-    {"bus", "\xF3\xB0\x83\xA7"},       // U+F00E7 bus
-    {"clock", "\xF3\xB0\x85\x90"},     // U+F0150 clock-outline
-    {"alert", "\xF3\xB0\x97\x96"},     // U+F05D6 alert-circle-outline
-    {"wifi", "\xF3\xB0\x96\xA9"},      // U+F05A9 wifi
-    {"link", "\xF3\xB0\x8C\xB9"},      // U+F0339 link-variant
-};
-
-inline const char *icon_glyph(const std::string &name) {
-  for (const auto &e : ICONS)
-    if (name == e.name) return e.glyph;
-  return "";
-}
 
 // ---------------------------------------------------------------- shared look
 // The document's one-letter row colour, as a token. W (and anything unknown) is not a state, so
@@ -290,9 +257,16 @@ inline std::string hhmm_of(uint32_t when) {
 
 // The stamp in the corner of every content face: "LIVE · 08:41", "SHOWING 08:12", "LOADING".
 inline std::string stamp_text(uint32_t asof, bool stale) {
-  if (asof == 0) return "LOADING";
+  if (asof == 0) return copy::LOADING;
   // U+00B7, the middle dot the design separates with.
-  return stale_now(asof, stale) ? "SHOWING " + hhmm_of(asof) : "LIVE \xC2\xB7 " + hhmm_of(asof);
+  return stale_now(asof, stale) ? copy::SHOWING + (" " + hhmm_of(asof))
+                                : copy::LIVE + (" \xC2\xB7 " + hhmm_of(asof));
+}
+
+// The footer of an empty card, which says how old what it stands in for is. Empty when the face
+// has never had a document, because there is nothing to be showing.
+inline std::string showing_foot(uint32_t asof) {
+  return asof == 0 ? std::string() : copy::SHOWING + (" " + hhmm_of(asof));
 }
 
 // Uppercase an ASCII string, for the strip's left label and the agenda's day headings. Document
@@ -350,15 +324,11 @@ inline std::string day_after(const std::string &ymd) {
 
 // How long an event has left before it starts, as the raised diary row says it. Empty when
 // either time is unreadable, which is how an event with no start says it has nothing to count.
+// The wording is hb_copy.h's; what is worked out here is the number of minutes.
 inline std::string starts_in(const std::string &t) {
   int at = hhmm_to_minutes(t), now = hhmm_to_minutes(g_nowhm);
   if (at < 0 || now < 0) return "";
-  int m = at - now;
-  if (m <= 0) return "now";
-  if (m == 1) return "in 1 minute";
-  if (m < 60) return "in " + std::to_string(m) + " minutes";
-  int h = (m + 30) / 60;
-  return h <= 1 ? "in 1 hour" : "in " + std::to_string(h) + " hours";
+  return copy::starts_in(at - now);
 }
 
 // "30m", "1h 15m", "2h", for a resting diary row. Empty when either end is not a time, which is
@@ -487,18 +457,34 @@ class StatusStrip {
       lv_obj_set_style_bg_opa(dot_, LV_OPA_COVER, 0);
     }
     lv_obj_set_x(left_, shown ? 18 : 0);
-    set_breathing(shown && breathing_);
+    apply_breathing_();
   }
-  void clear_dot() { set_dot(T_LIFT, false); }
 
   // The live dot breathes over four seconds. A stale board stops it: nothing about that screen
-  // is happening now.
+  // is happening now. What the face asked for is remembered either way, so the night can stop
+  // the dot without the day having to be told to start it again.
   void set_breathing(bool on) {
     breathing_ = on;
+    apply_breathing_();
+  }
+  // Night holds the dot still. A hallway at two in the morning has nothing moving in it, and a
+  // fade that never rests is the one thing on this face that would catch an eye in the dark.
+  void set_night(bool night) {
+    if (night_ == night) return;
+    night_ = night;
+    apply_breathing_();
+  }
+
+  lv_obj_t *root() const { return root_; }
+
+ private:
+  // The dot is left at full opacity whenever it is not breathing, so a still dot is a lit dot
+  // and never one caught half way through a fade.
+  void apply_breathing_() {
     if (dot_ == nullptr) return;
     lv_anim_delete(dot_, anim_bg_opa_cb_);
     lv_obj_set_style_bg_opa(dot_, LV_OPA_COVER, 0);
-    if (!on) return;
+    if (!breathing_ || night_ || lv_obj_has_flag(dot_, LV_OBJ_FLAG_HIDDEN)) return;
     lv_anim_t a;
     lv_anim_init(&a);
     lv_anim_set_var(&a, dot_);
@@ -510,16 +496,13 @@ class StatusStrip {
     lv_anim_start(&a);
   }
 
-  lv_obj_t *root() const { return root_; }
-
- private:
   static void anim_bg_opa_cb_(void *var, int32_t v) {
     lv_obj_set_style_bg_opa(static_cast<lv_obj_t *>(var), (lv_opa_t) v, 0);
   }
 
   lv_obj_t *root_ = nullptr, *dot_ = nullptr, *left_ = nullptr, *right_ = nullptr;
   Tok left_tok_ = T_CHALK70, right_tok_ = T_CHALK70;
-  bool breathing_ = false;
+  bool breathing_ = false, night_ = false;
 };
 
 // The page indicator along the bottom: one dot per face, the current one a capsule. Hidden until
@@ -625,6 +608,12 @@ class PageView {
     show_problem_(msg);
   }
 
+  // The palette itself is global and repaints through the shared styles. What a view has to do
+  // for itself is the movement (a breathing dot has no business breathing at night) and the few
+  // colours that were set by value rather than by style; a view with neither does nothing here.
+  // A strip that was never built ignores it, which is how the board face gets away with this.
+  virtual void set_night(bool night) { strip_.set_night(night); }
+
   lv_obj_t *root() const { return root_; }
   const std::string &id() const { return id_; }
   char type() const { return type_; }
@@ -702,7 +691,7 @@ class ClockView : public PageView {
     time_ = mk_label(root_, 0, 146, 480, 0, F(g_fonts.clock132), T_CHALK, "");
     lv_obj_set_style_text_align(time_, LV_TEXT_ALIGN_CENTER, 0);
     tracked(time_, -8);
-    date_ = mk_label(root_, 24, 274, 432, 28, F(g_fonts.sans500_20), T_CHALK70, WAITING);
+    date_ = mk_label(root_, 24, 274, 432, 28, F(g_fonts.sans500_20), T_CHALK70, copy::CLOCK_WAITING);
     lv_obj_set_style_text_align(date_, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(date_, LV_LABEL_LONG_MODE_DOTS);
 
@@ -719,7 +708,7 @@ class ClockView : public PageView {
   void tick(esphome::ESPTime now) override {
     if (!now.is_valid()) {
       lv_label_set_text(time_, "");
-      lv_label_set_text(date_, WAITING);
+      lv_label_set_text(date_, copy::CLOCK_WAITING);
       strip_.set_left("", T_CHALK70);
       last_hm_.clear();
       return;
@@ -795,8 +784,6 @@ class ClockView : public PageView {
   }
 
  private:
-  static constexpr const char *WAITING = "Setting the clock.";
-
   // One row at the foot of the face, and three things that want it. A firmware update is the
   // loudest, then the document's notice, then a live problem; while any of them applies the
   // diary dot and the temperature go and what is left is a grey line.
@@ -898,6 +885,15 @@ class PairingView : public PageView {
     refresh_caption_();
   }
 
+  // The QR's two colours are set by value on the canvas rather than through a style, and they are
+  // baked in when the code is drawn, so the palette turning over means drawing it again.
+  void set_night(bool night) override {
+    PageView::set_night(night);
+    lv_qrcode_set_dark_color(qr_, col(T_NIGHT));
+    lv_qrcode_set_light_color(qr_, col(T_CHALK));
+    if (!qr_url_.empty()) lv_qrcode_update(qr_, qr_url_.c_str(), (uint32_t) qr_url_.size());
+  }
+
   // What the QR carries. The host simulator prints it so the fragment contract stays checked;
   // nothing on the device reads it, and it is never logged.
   const std::string &qr_url() const { return qr_url_; }
@@ -907,17 +903,15 @@ class PairingView : public PageView {
   // The design's 360, widened to the full content width. LVGL breaks a line at a full stop as
   // readily as at a space, and at 360 that split hallboard.co.uk across two lines.
   static const int CAPTION_W = 400;
-  static constexpr const char *SCAN = "Scan, or type it at hallboard.co.uk/pair";
-  static constexpr const char *WAITING = "Getting a pairing code.";
 
   // One slot, and three things that want it: a problem first, then the caption for whichever of
   // the two states the page is in.
   void refresh_caption_() {
-    const char *text = WAITING;
+    const char *text = copy::PAIR_WAITING;
     if (!problem_.empty())
       text = problem_.c_str();
     else if (code_shown_.size() == 6)
-      text = SCAN;
+      text = copy::PAIR_SCAN;
     lv_label_set_text(caption_, text);
     relayout_();
   }
@@ -1083,7 +1077,7 @@ class BootView {
       // Whatever the Wi-Fi trouble is, the status string already says what to do about it.
       set_help_(msg);
     } else if (problems_ >= 2) {
-      set_help_("Cannot reach hallboard.co.uk. Trying again.");
+      set_help_(copy::BOOT_BACKEND_HELP);
       set_detail_(msg);
     }
   }
@@ -1097,45 +1091,44 @@ class BootView {
     if ((int32_t) (now - hold_until_) < 0) return;
     switch (step_) {
       case S_WIFI:
-        if (!started_) return begin_step_(0, "Connecting to Wi-Fi");
+        if (!started_) return begin_step_(0, copy::BOOT_WIFI);
         if (have_net_) {
-          finish_step_(0, "Connected to Wi-Fi");
+          finish_step_(0, copy::BOOT_WIFI_DONE);
           return advance_(S_CONTENT);
         }
         // Twenty seconds without a network and the household needs telling how to fix it. A
         // status string that already said so wins: it is more specific than this one.
-        if (help_text_.empty() && (int32_t) (now - t0_) > 20000)
-          set_help_("Still looking for Wi-Fi. Hold the side button.");
+        if (help_text_.empty() && (int32_t) (now - t0_) > 20000) set_help_(copy::BOOT_WIFI_HELP);
         return;
       case S_CONTENT:
-        if (!started_) return begin_step_(1, "Fetching your pages");
+        if (!started_) return begin_step_(1, copy::BOOT_PAGES);
         if (unpaired_) {
-          finish_step_(1, "Pages loaded");
+          finish_step_(1, copy::BOOT_PAGES_DONE);
           return advance_(S_PAIR);
         }
         if (have_doc_) {
-          finish_step_(1, "Pages loaded");
+          finish_step_(1, copy::BOOT_PAGES_DONE);
           content_at_ = now;
           return advance_(S_TIME);
         }
         return;
       case S_TIME:
-        if (!started_) return begin_step_(2, "Setting the clock");
+        if (!started_) return begin_step_(2, copy::BOOT_CLOCK);
         if (have_time_) {
-          finish_step_(2, "Clock set");
+          finish_step_(2, copy::BOOT_CLOCK_DONE);
           return advance_(S_READY);
         }
         // SNTP is not worth waiting on: the clock page carries the waiting line instead.
         if ((int32_t) (now - content_at_) > 30000) {
-          set_help_("The clock is not set yet.");
+          set_help_(copy::CLOCK_NOT_SET);
           return advance_(S_READY);
         }
         return;
       case S_READY:
-        if (!started_) return begin_step_(3, "Ready");
+        if (!started_) return begin_step_(3, copy::BOOT_READY);
         return start_fade_();
       case S_PAIR:
-        if (!started_) return begin_step_(3, "Pair this board");
+        if (!started_) return begin_step_(3, copy::BOOT_PAIR);
         return start_fade_();
       default:
         return;
@@ -1150,7 +1143,7 @@ class BootView {
 
   // Each of these writes exactly one line and holds the next transition for 600 ms. The three
   // states are told apart by colour alone, as the design has them: there is no tick glyph, and
-  // the one that belonged to Montserrat is not in the mono face the steps are set in.
+  // the mono face the steps are set in holds no symbol that could stand in for one.
   void begin_step_(int i, const char *text) {
     set_tok(steps_[i], T_TITLE2);
     lv_label_set_text(steps_[i], text);
@@ -1239,7 +1232,7 @@ class BoardView : public PageView {
                   (lv_font_get_line_height(sf) - sf->base_line);
     title_ = mk_label(root_, PAD, HEAD_Y, 266, 40, tf, T_CHALK, "");
     lv_label_set_long_mode(title_, LV_LABEL_LONG_MODE_DOTS);
-    stamp_lbl_ = mk_label(root_, 480 - PAD - 130, stamp_y, 130, 20, sf, T_CHALK50, "LOADING");
+    stamp_lbl_ = mk_label(root_, 480 - PAD - 130, stamp_y, 130, 20, sf, T_CHALK50, copy::LOADING);
     tracked(stamp_lbl_, 1);
     lv_obj_set_style_text_align(stamp_lbl_, LV_TEXT_ALIGN_RIGHT, 0);
 
@@ -1380,13 +1373,13 @@ class BoardView : public PageView {
     bool missing = pg.asof == 0;
     // A stop has no window to promise: only a rail board's adapter asks for one.
     bool stop = module_ == "bus" || module_ == "tube";
-    const char *sentence = missing     ? "Can't reach the timetable."
-                           : stop      ? "Nothing due at this stop."
-                           : arrivals_ ? "Nothing arriving in the next two hours."
-                                       : "Nothing due in the next two hours.";
-    lv_label_set_text(card_label_, missing ? "OFFLINE" : "NOTHING DUE");
+    const char *sentence = missing     ? copy::BOARD_NO_TIMETABLE
+                           : stop      ? copy::BOARD_NONE_STOP
+                           : arrivals_ ? copy::BOARD_NONE_ARRIVING
+                                       : copy::BOARD_NONE_DUE;
+    lv_label_set_text(card_label_, missing ? copy::OFFLINE : copy::NOTHING_DUE);
     lv_label_set_text(card_text_, sentence);
-    std::string foot = missing ? std::string() : "SHOWING " + hhmm_of(pg.asof);
+    std::string foot = missing ? std::string() : showing_foot(pg.asof);
     lv_label_set_text(card_foot_, foot.c_str());
     set_hidden(card_foot_, foot.empty());
     set_hidden(card_, false);
@@ -1519,8 +1512,7 @@ class AgendaView : public PageView {
     }
     // Seven days with nothing in them is a result, not a failure. The card says so in the same
     // shape the board's empty state uses.
-    empty_.set("NOTHING PLANNED", "Nothing in the diary this week. Enjoy it.",
-               asof_ == 0 ? std::string() : "SHOWING " + hhmm_of(asof_));
+    empty_.set(copy::NOTHING_PLANNED, copy::AGENDA_EMPTY, showing_foot(asof_));
   }
 
  private:
@@ -1546,9 +1538,9 @@ class AgendaView : public PageView {
   // left half holds 26 mono characters; past that the day goes to its short form rather than
   // the line being cut, which is only ever a long weekday with nothing on it.
   std::string head_text_(int today) const {
-    std::string count = today == 0   ? "NOTHING TODAY"
-                        : today == 1 ? "1 EVENT"
-                                     : std::to_string(today) + " EVENTS";
+    std::string count = today == 0   ? copy::NOTHING_TODAY
+                        : today == 1 ? copy::ONE_EVENT
+                                     : std::to_string(today) + copy::EVENTS;
     if (day_.empty()) return count;
     std::string line = day_ + " \xC2\xB7 " + count;
     // The middle dot is two bytes and one character, so the count is off by one either way.
@@ -1556,7 +1548,7 @@ class AgendaView : public PageView {
     return line;
   }
   std::string heading_(const AgendaEvent &e) const {
-    if (!tomorrow_.empty() && e.d == tomorrow_) return "TOMORROW";
+    if (!tomorrow_.empty() && e.d == tomorrow_) return copy::TOMORROW_HEAD;
     return long_weekday(e.w);
   }
 
@@ -1577,7 +1569,7 @@ class AgendaView : public PageView {
       place_label_(c.title, TEXT_X, PAD, ROW_W - TEXT_X - PAD, e.s);
       lv_obj_set_style_text_font(c.title, F(g_fonts.sans600_20), 0);
       set_tok(c.title, T_CHALK);
-      std::string sub = e.all_day ? std::string("All day") : starts_in(e.t);
+      std::string sub = e.all_day ? std::string(copy::ALL_DAY) : starts_in(e.t);
       if (!e.l.empty()) sub += (sub.empty() ? "" : " \xC2\xB7 ") + e.l;
       place_label_(c.meta, TEXT_X, PAD + 28, ROW_W - TEXT_X - PAD, sub);
       lv_obj_set_style_text_font(c.meta, F(g_fonts.sans500_16), 0);
@@ -1591,7 +1583,7 @@ class AgendaView : public PageView {
     lv_obj_set_style_text_font(c.title, F(g_fonts.sans500_18), 0);
     set_tok(c.title, T_TITLE2);
     place_label_(c.meta, ROW_W - PAD - DUR_W, time_y, DUR_W,
-                 e.all_day ? std::string("All day") : duration_text(e.t, e.u));
+                 e.all_day ? std::string(copy::ALL_DAY) : duration_text(e.t, e.u));
     lv_obj_set_style_text_font(c.meta, F(g_fonts.mono15), 0);
     lv_obj_set_style_text_align(c.meta, LV_TEXT_ALIGN_RIGHT, 0);
     set_tok(c.meta, T_CHALK50);
@@ -1651,8 +1643,8 @@ class AgendaView : public PageView {
 // 24 px of padding, the place and the stamp on a 28 px header, one big temperature with the day
 // in a line and a sentence under it, and the hours to come as a strip of bars along the bottom.
 //
-// No icons are drawn here at all: the Material glyphs are on their way out and the weather set
-// the design wants has not been drawn yet. The bars and the numbers say it in the meantime.
+// No icons are drawn here at all: the icon webfont went with S14 and the weather set the design
+// wants has not been drawn yet. The bars and the numbers say it in the meantime.
 class SkyView : public PageView {
  public:
   SkyView(lv_obj_t *parent, const std::string &id) : PageView(parent, id, 'g') {
@@ -1674,7 +1666,7 @@ class SkyView : public PageView {
   void apply(const Page &pg) override {
     asof_ = pg.asof;
     stale_ = pg.stale;
-    strip_.set_left(pg.place.empty() ? std::string("WEATHER") : upper(pg.place), T_WEATHER);
+    strip_.set_left(pg.place.empty() ? std::string(copy::WEATHER) : upper(pg.place), T_WEATHER);
     set_stamp_(asof_, stale_);
 
     std::string temp = pg.temp, feels = pg.feels, head = pg.head, sent = pg.sent;
@@ -1692,13 +1684,12 @@ class SkyView : public PageView {
     }
     if (temp.empty()) {
       for (lv_obj_t *o : {hero_, feels_, head_, sent_, card_}) set_hidden(o, true);
-      empty_.set("OFFLINE", "Can't reach the forecast.",
-                 asof_ == 0 ? std::string() : "SHOWING " + hhmm_of(asof_));
+      empty_.set(copy::OFFLINE, copy::SKY_NO_FORECAST, showing_foot(asof_));
       return;
     }
     empty_.hide();
     label_text(hero_, temp + "\xC2\xB0");              // U+00B0
-    label_text(feels_, feels.empty() ? "" : "feels " + feels + "\xC2\xB0");
+    label_text(feels_, feels.empty() ? "" : copy::FEELS + feels + "\xC2\xB0");
     label_text(head_, head);
     label_text(sent_, sent);
     for (lv_obj_t *o : {hero_, feels_, head_, sent_}) set_hidden(o, false);
@@ -1862,8 +1853,7 @@ class ListView : public PageView {
       empty_.hide();
       return;
     }
-    empty_.set("ALL DONE", "Nothing on the list. Enjoy it.",
-               pg.asof == 0 ? std::string() : "SHOWING " + hhmm_of(pg.asof));
+    empty_.set(copy::ALL_DONE, copy::LIST_EMPTY, showing_foot(pg.asof));
   }
 
   // The strip carries the short date, as the clock's does, and the stamp owns the other end.
@@ -1871,6 +1861,13 @@ class ListView : public PageView {
     if (g_nowhm == last_hm_) return;
     last_hm_ = g_nowhm;
     strip_.set_left(now.is_valid() ? ClockView::short_date(now) : std::string(), T_CHALK70);
+  }
+
+  // A ring is a border colour, which no shared style reaches: it is set by value when a row is
+  // built, so every row already on the face has to be told when the palette turns over.
+  void set_night(bool night) override {
+    PageView::set_night(night);
+    for (auto &r : rows_) lv_obj_set_style_border_color(r.ring, col(T_REMINDERS), 0);
   }
 
  private:
@@ -2006,6 +2003,7 @@ class PageHost {
 #endif
     views_.clear();
     views_.emplace_back(new ClockView(host_));
+    views_[0]->set_night(night_);
     cur_ = 0;
     dots_.build(host_);
     boot_.reset(new BootView(host_, fw));
@@ -2019,13 +2017,15 @@ class PageHost {
   // needs a clean host between them. Order matters: the views and the overlay delete their own
   // roots, so they go before the host they hang off.
   void reset() {
+    // The palette is a global, so it goes back to day with everything else: one scenario in the
+    // host simulator must not inherit the night the last one turned on.
+    set_night(false);
     views_.clear();
     boot_.reset();
     dots_.destroy();
     if (host_ != nullptr) lv_obj_delete(host_);
     host_ = nullptr;
     cur_ = 0;
-    unpaired_ = false;
     ssid_.clear();
     events_.clear();
     temp_.clear();
@@ -2037,7 +2037,6 @@ class PageHost {
   // delete what is gone, and stay on the page the user was looking at.
   void set_document(const Document &doc) {
     if (host_ == nullptr) return;
-    unpaired_ = false;
     std::string keep = cur_ < views_.size() ? views_[cur_]->id() : "";
     std::vector<std::unique_ptr<PageView>> next;
     next.push_back(std::move(views_[0]));  // the clock is always page one
@@ -2084,7 +2083,6 @@ class PageHost {
   // Unclaimed (or freshly 401'd): the clock and the pairing page, nothing else.
   void set_unpaired(const std::string &code) {
     if (host_ == nullptr) return;
-    unpaired_ = true;
     std::unique_ptr<PageView> clock = std::move(views_[0]);
     std::unique_ptr<PageView> pair;
     for (size_t i = 1; i < views_.size(); i++)
@@ -2093,7 +2091,10 @@ class PageHost {
         break;
       }
     views_.clear();
-    if (!pair) pair.reset(new PairingView(host_));
+    if (!pair) {
+      pair.reset(new PairingView(host_));
+      pair->set_night(night_);
+    }
     // The diary and the weather belonged to a household that no longer claims this device, and
     // so did the notice.
     events_.clear();
@@ -2203,6 +2204,20 @@ class PageHost {
     if (boot_) boot_->on_status(msg, problem);
   }
 
+  // The night palette, on or off. hallboard.yaml's apply_brightness is the only caller: the
+  // household's window and the two-minute lift a touch gives it are decided there, beside the
+  // brightness, so the two never disagree about what time of night it is.
+  //
+  // A no-op when nothing has changed, because that script runs every 60 s and repainting the
+  // whole object tree once a minute would be work for nothing. The state is kept so a view built
+  // later (a page a new document brought, the pairing page) starts on the right palette.
+  void set_night(bool night) {
+    if (night == night_) return;
+    night_ = night;
+    hb::set_night(night);
+    for (auto &v : views_) v->set_night(night);
+  }
+
   // Firmware update progress and the post-update confirmation, shown on the clock page only so a
   // board or agenda keeps its own footer. An empty string clears it.
   void set_notice(const std::string &msg) {
@@ -2213,7 +2228,6 @@ class PageHost {
 
   size_t current() const { return cur_; }
   size_t count() const { return views_.size(); }
-  bool unpaired() const { return unpaired_; }
 
   // What the pairing QR carries, empty when there is no pairing page or no code yet. The host
   // simulator prints it so the fragment contract stays checked; the device never logs it.
@@ -2226,7 +2240,6 @@ class PageHost {
 
   PageView *view(size_t i) const { return i < views_.size() ? views_[i].get() : nullptr; }
   PageView *current_view() const { return view(cur_); }
-  char current_type() const { return cur_ < views_.size() ? views_[cur_]->type() : 0; }
   BoardView *current_board() const {
     PageView *v = current_view();
     return (v != nullptr && v->type() == 'b') ? static_cast<BoardView *>(v) : nullptr;
@@ -2250,6 +2263,9 @@ class PageHost {
     else
       v.reset(new GenericView(host_, pg.id));
     v->set_module(pg.module);
+    // Built after the window opened, so it starts on the palette the board is already on rather
+    // than flashing the day one until the next minute's re-evaluation.
+    v->set_night(night_);
     return v;
   }
 
@@ -2337,11 +2353,12 @@ class PageHost {
       // Sorted by day and time, so the first one still to come is the next one.
       if (e.t.size() == 5 && e.t > g_nowhm) return e.t + " " + e.s;
     }
-    if (all_day != nullptr) return "All day \xC2\xB7 " + all_day->s;
+    if (all_day != nullptr) return copy::ALL_DAY + (" \xC2\xB7 " + all_day->s);
     std::string tomorrow = day_after(g_today);
     if (tomorrow.empty()) return "";
     for (const auto &e : events_)
-      if (e.d == tomorrow) return "Tomorrow \xC2\xB7 " + (e.all_day ? e.s : e.t + " " + e.s);
+      if (e.d == tomorrow)
+        return copy::TOMORROW + (" \xC2\xB7 " + (e.all_day ? e.s : e.t + " " + e.s));
     return "";
   }
 
@@ -2386,7 +2403,8 @@ class PageHost {
   std::vector<ClockEvent> events_;
   std::string temp_, line_day_, line_hm_;
   size_t cur_ = 0;
-  bool unpaired_ = false;
+  // Which palette the board is on, so a view built later starts on the same one.
+  bool night_ = false;
 };
 
 inline PageHost g_host;

@@ -112,6 +112,8 @@ inline bool parse_screen(const std::string &body, hb::Document &out) {
       for (JsonObject rw : rows) {
         if (p.grows.size() >= MAX_GROWS) break;
         hb::GenericRow r;
+        // Parsed and ignored: a backend older than 1.4.0 names an icon, and no face draws one
+        // any more. Still read so a document carrying one is not treated as malformed.
         r.icon = jstr(rw["i"], 12);
         r.value = jstr(rw["v"], 8);
         r.a = jstr(rw["a"], 40);

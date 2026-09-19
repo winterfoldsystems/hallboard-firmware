@@ -32,10 +32,12 @@ the UI changes and not otherwise.
 | Name | What it shows |
 |---|---|
 | `clock` | The clock page of a paired board, with the weather line under it |
+| `clock-night` | The same inside the household's night window: muted hues, the live dot still |
 | `clock-notice` | The same with a `settings.notice` from the document |
 | `clock-problem` | The same with a live problem status, which wins over a notice |
-| `clock-waiting-time` | SNTP never answered: no time, no date, "Waiting for time..." |
+| `clock-waiting-time` | SNTP never answered: no time, no date, "Setting the clock." |
 | `board-live` | A rail departures board, five rows, one delayed |
+| `board-live-night` | The same board on the night palette |
 | `dots` | The same board a moment after a swipe, with the page indicator up |
 | `board-stale` | An arrivals board being served from the backend's last good data |
 | `board-empty` | A board with no departures in the window |
@@ -44,18 +46,28 @@ the UI changes and not otherwise.
 | `board-tube` | A tube board: waits instead of expected times, no platform |
 | `board-bus` | A bus board: route numbers in the platform column |
 | `day` | The agenda, today marked, spent events dropped, two later days |
+| `day-night` | The same diary on the night palette |
 | `day-empty` | The agenda with nothing in the next seven days |
-| `weather` | The generic template as the weather module fills it, seven rows |
-| `reminders` | The generic template as the to-do module fills it |
+| `weather` | The weather face: the hero, the sentence and the hours to come |
+| `weather-night` | The same forecast on the night palette |
+| `weather-rows-only` | A weather page from a backend older than the face: rows and nothing else |
+| `reminders` | The to-do face, open items as rings |
+| `reminders-night` | The same list on the night palette |
+| `reminders-empty` | The to-do face with nothing left on it |
 | `pair` | The pairing page with a code and its QR |
+| `pair-night` | The same page at night, which is what re-colours the QR itself |
 | `pair-waiting` | Unclaimed, but the pairing call has not come back yet |
+| `pair-problem` | A code on screen and the network gone: the problem takes the caption |
 | `boot-step1` | The boot overlay looking for Wi-Fi |
 | `boot-step2` | Wi-Fi ticked off, downloading content |
 | `boot-step3` | Content ticked off, syncing time |
 | `boot-step4` | All four steps done, a moment before the overlay fades |
+| `boot-step4-night` | The same, with the night palette already applied |
 | `boot-help` | A Wi-Fi problem during the first step, with the help line it puts up |
 
-Adding one is a row in the `SCENARIOS` table in `main.cpp` and, usually, a fixture.
+Adding one is a row in the `SCENARIOS` table in `main.cpp` and, usually, a fixture. A `-night`
+variant is the day scenario followed by `s.night()`, which is the call hallboard.yaml's
+`apply_brightness` makes when the household's window opens.
 
 ## What it does not cover
 
@@ -73,4 +85,5 @@ Adding one is a row in the `SCENARIOS` table in `main.cpp` and, usually, a fixtu
   underneath and would ignore a variable font's weight axis, which is why no `[wght]` file is
   fetched. Hinting still differs, so the glyphs are a shade lighter on screen than on the board.
 - **The panel.** Colours go through RGB565 as they do on the board, but nothing models the
-  backlight, the night dimming window or the panel's own gamma.
+  backlight or the panel's own gamma. The night *palette* is rendered (the `-night` scenarios);
+  the night *dimming* is a backlight level and does not reach a PNG.

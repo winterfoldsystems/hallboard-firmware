@@ -69,7 +69,6 @@ const FontSpec FONTS[] = {
     {&hb::FontSet::mono16, MONO_400, 16},
     {&hb::FontSet::mono15, MONO_400, 15},
     {&hb::FontSet::mono14, MONO_400, 14},
-    {&hb::FontSet::icon, "../fonts/materialdesignicons-webfont.ttf", 48},
 };
 
 std::string read_file(const std::string &path) {
@@ -189,6 +188,13 @@ struct Sim {
     hb::g_host.show(page, false);
     pump(100);
   }
+  // The household's night window has opened: the night palette, and the live dot standing still
+  // rather than breathing. On the board this arrives from hallboard.yaml's apply_brightness, which
+  // decides the window and the two-minute lift; here the scenario says when.
+  void night() {
+    hb::g_host.set_night(true);
+    pump(100);
+  }
 };
 
 // Back to a bare screen, so one scenario cannot leak a page into the next.
@@ -222,16 +228,16 @@ enum BootStage { BOOT_1 = 1, BOOT_2, BOOT_3, BOOT_4 };
 
 void boot_to(Sim &s, BootStage stage) {
   s.attach();
-  s.pump(550);   // "Connecting to Wi-Fi...", wordmark animation finished
+  s.pump(550);   // "Connecting to Wi-Fi", wordmark animation finished
   if (stage == BOOT_1) return;
   s.network("Home Wi-Fi");
-  s.pump(800);   // Wi-Fi ticked off, "Downloading content..."
+  s.pump(800);   // Wi-Fi ticked off, "Fetching your pages"
   if (stage == BOOT_2) return;
   s.document("screen_full.json");
-  s.pump(1300);  // content ticked off, "Syncing time..."
+  s.pump(1300);  // content ticked off, "Setting the clock"
   if (stage == BOOT_3) return;
   s.time_valid = true;
-  s.pump(1200);  // time ticked off, "Ready to use" in green, still short of the fade
+  s.pump(1200);  // clock ticked off, "Ready" in green, still short of the fade
 }
 
 struct Scenario {
@@ -241,11 +247,16 @@ struct Scenario {
 
 const Scenario SCENARIOS[] = {
     {"clock", [](Sim &s) { booted(s, "screen_full.json", 0); }},
+    {"clock-night",
+     [](Sim &s) {
+       booted(s, "screen_full.json", 0);
+       s.night();
+     }},
     {"clock-notice", [](Sim &s) { booted(s, "screen_notice.json", 0); }},
     {"clock-problem",
      [](Sim &s) {
        booted(s, "screen_full.json", 0);
-       hb::g_host.set_status("Cannot reach hallboard.co.uk, retrying...", true);
+       hb::g_host.set_status(hb::copy::with_showing(hb::copy::CANT_REACH, "08:12"), true);
        s.pump(200);
      }},
     {"clock-waiting-time",
@@ -260,6 +271,11 @@ const Scenario SCENARIOS[] = {
        s.show(0);
      }},
     {"board-live", [](Sim &s) { booted(s, "screen_full.json", 1); }},
+    {"board-live-night",
+     [](Sim &s) {
+       booted(s, "screen_full.json", 1);
+       s.night();
+     }},
     {"dots",
      [](Sim &s) {
        // A swipe from the clock to the first board: the page indicator is up, part way through
@@ -275,12 +291,27 @@ const Scenario SCENARIOS[] = {
     {"board-tube", [](Sim &s) { booted(s, "board_tube.json", 1); }},
     {"board-bus", [](Sim &s) { booted(s, "board_bus.json", 1); }},
     {"day", [](Sim &s) { booted(s, "screen_full.json", 2); }},
+    {"day-night",
+     [](Sim &s) {
+       booted(s, "screen_full.json", 2);
+       s.night();
+     }},
     {"day-empty", [](Sim &s) { booted(s, "agenda_empty.json", 1); }},
     {"weather", [](Sim &s) { booted(s, "screen_full.json", 3); }},
+    {"weather-night",
+     [](Sim &s) {
+       booted(s, "screen_full.json", 3);
+       s.night();
+     }},
     // A weather page from a backend older than the face, or one cached before it: rows and
     // nothing else, so the hero falls back to the first row and the strip has nothing to draw.
     {"weather-rows-only", [](Sim &s) { booted(s, "weather_rows_only.json", 1); }},
     {"reminders", [](Sim &s) { booted(s, "screen_full.json", 4); }},
+    {"reminders-night",
+     [](Sim &s) {
+       booted(s, "screen_full.json", 4);
+       s.night();
+     }},
     {"reminders-empty", [](Sim &s) { booted(s, "reminders_empty.json", 1); }},
     {"pair",
      [](Sim &s) {
@@ -294,6 +325,19 @@ const Scenario SCENARIOS[] = {
        // The QR must carry the code in the fragment and nothing else: printed rather than
        // eyeballed, because a PNG of a QR says nothing about what is in it.
        fprintf(stderr, "[qr] %s\n", hb::g_host.pair_qr_url().c_str());
+     }},
+    {"pair-night",
+     [](Sim &s) {
+       // The QR's two colours are set on the canvas rather than through a style, so this is the
+       // face that says whether the night reaches them.
+       s.attach();
+       s.network("Home Wi-Fi");
+       s.time_valid = true;
+       s.pump(1000);
+       hb::g_host.set_unpaired("H7K2M9");
+       s.finish_boot();
+       s.show(1);
+       s.night();
      }},
     {"pair-waiting",
      [](Sim &s) {
@@ -317,20 +361,25 @@ const Scenario SCENARIOS[] = {
        hb::g_host.set_unpaired("H7K2M9");
        s.finish_boot();
        s.show(1);
-       hb::g_host.set_status("Wi-Fi has dropped. Hold the side button.", true);
+       hb::g_host.set_status(hb::copy::WIFI_DROPPED, true);
        s.pump(200);
      }},
     {"boot-step1", [](Sim &s) { boot_to(s, BOOT_1); }},
     {"boot-step2", [](Sim &s) { boot_to(s, BOOT_2); }},
     {"boot-step3", [](Sim &s) { boot_to(s, BOOT_3); }},
     {"boot-step4", [](Sim &s) { boot_to(s, BOOT_4); }},
+    {"boot-step4-night",
+     [](Sim &s) {
+       boot_to(s, BOOT_4);
+       s.night();
+     }},
     {"boot-help",
      [](Sim &s) {
        // A Wi-Fi problem while the first step is still running: the status string is the help
        // line, because it already says what the household should do about it.
        s.attach();
        s.pump(300);
-       hb::g_host.set_status("No Wi-Fi network saved. Hold the side button.", true);
+       hb::g_host.set_status(hb::copy::WIFI_NONE_SAVED, true);
        s.pump(700);
      }},
 };

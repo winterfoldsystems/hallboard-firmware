@@ -82,9 +82,39 @@ inline constexpr Palette DAY = {{
     0xFFFFFF,  // T_WHITE
 }};
 
-// Inside the night window the palette desaturates to half chroma. S12 generates the table; until
-// then night is day, so set_night() is a no-op that already goes through the right path.
-inline constexpr Palette NIGHT = DAY;
+// Inside the household's night window the palette keeps every lightness and hue but halves the
+// chroma: a hallway screen must never be the brightest or the most colourful thing in a dark
+// house. Generated from DAY by firmware/sim/tools/night_palette.py; regenerate, never edit by hand.
+inline constexpr Palette NIGHT = {{
+    0x0F0F12,  // T_NIGHT
+    0x1B1A1E,  // T_CARD
+    0x29282D,  // T_RAISED
+    0x2E2E32,  // T_LINE
+    0x070709,  // T_BEZEL
+    0xF5F4F7,  // T_CHALK
+    0xABABAF,  // T_CHALK70
+    0x808084,  // T_CHALK50
+    0xA59FC5,  // T_TRANSIT
+    0xC99F9B,  // T_CALENDAR
+    0x94B7C8,  // T_WEATHER
+    0x9FC2AA,  // T_REMINDERS
+    0x9FC2AA,  // T_OK
+    0xD7B88F,  // T_LATE
+    0xC27775,  // T_OFF
+    0x7972BC,  // T_VIOLET
+    0xA9A5D3,  // T_LIFT
+    0xDEDDE0,  // T_HEADLINE
+    0xE8E7EA,  // T_TITLE2
+    0xD1D0D4,  // T_TIME2
+    0x929296,  // T_HOUR
+    0x48474D,  // T_DOT
+    0x38373C,  // T_FIELD
+    0x424247,  // T_OUTLINE
+    0x242428,  // T_DIVIDER
+    0x161518,  // T_DONEBG
+    0x424145,  // T_PENDING
+    0xFFFFFF,  // T_WHITE
+}};
 
 // One text style and one background style per token, shared by every widget that uses it. A
 // widget adds the style rather than setting a local colour, which is what makes apply_palette()
@@ -119,5 +149,17 @@ inline void init_styles() {
 
 // The raw colour, for the few places a style cannot reach: a border, the QR's two colours.
 inline lv_color_t col(Tok t) { return lv_color_hex(g_palette->rgb[t]); }
+
+// Which palette the board is on. The night window and the two-minute lift are decided in one
+// place (hallboard.yaml's apply_brightness) and arrive here through PageHost::set_night.
+inline bool g_night = false;
+
+// Switch the whole board between the two palettes. Every widget that took a shared style is
+// repainted by this one call; the handful of colours set by value (a QR's two, a ring's border)
+// are re-applied by the views, which is what PageHost::set_night forwards for.
+inline void set_night(bool night) {
+  g_night = night;
+  apply_palette(night ? NIGHT : DAY);
+}
 
 }  // namespace hb
