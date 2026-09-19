@@ -121,6 +121,7 @@ struct FontSet {
   const lv_font_t *clock132 = nullptr;   // Figtree 600, the clock face
   const lv_font_t *hero88 = nullptr;     // Figtree 600, the temperature hero
   const lv_font_t *sans600_30 = nullptr;
+  const lv_font_t *sans600_24 = nullptr;
   const lv_font_t *sans600_20 = nullptr;
   const lv_font_t *sans500_22 = nullptr;
   const lv_font_t *sans500_20 = nullptr;
@@ -1267,36 +1268,38 @@ class BoardView : public PageView {
 
   // Columns inside a row, measured from the row's own left edge: 16 px of padding, a 62 px time,
   // a 14 px gap, then the destination over its status, with the platform right-aligned at the
-  // far end. The platform sits on the destination's line rather than the row's middle, which
-  // leaves the status the full width: the composed status strings are long and the design's own
-  // are not.
+  // far end. The time and the platform both sit on the destination's line rather than the row's
+  // middle: the three are read together, and it leaves the status the full width, because the
+  // composed status strings are long and the design's own are not. The platform is the largest
+  // thing in the row, since it is the one read from the far side of the hall on the way out.
   void build_row_(Row &r, int i) {
     int h = row_h(i), y = row_y(i);
     bool first = i == 0;
     // The destination and its status are centred in the row's height.
-    int dest_h = first ? 26 : 24, pad = (h - (dest_h + 2 + 20)) / 2;
+    const int dest_h = first ? 30 : 28, status_h = 24, plat_h = 36;
+    int pad = (h - (dest_h + 2 + status_h)) / 2;
     r.box = first ? mk_panel(root_, ROW_X, y, ROW_W, h, T_RAISED, 16)
                   : mk_obj(root_, ROW_X, y, ROW_W, h);
     // The third and fourth rows carry a hairline along the top, as the design has them.
     if (i >= 2) mk_rule(r.box, 0, 0, ROW_W, T_LINE);
     // The columns are measured off ROW_W rather than written down, so the row follows the page's
     // margin: 16 of padding at either end, a 62 px time, a 14 px gap, the platform at the far end.
-    const int rpad = 16, time_w = 62, text_x = 92, plat_w = 60, plat_x = ROW_W - rpad - plat_w;
+    const int rpad = 16, time_w = 62, text_x = 92, plat_w = 72, plat_x = ROW_W - rpad - plat_w;
     // No tracking on the time, as the design has it: 62 px holds "08:47" at mono 20 and not a
     // pixel more, which is what makes the column line up down the face.
-    r.time = mk_label(r.box, rpad, (h - 26) / 2, time_w, 26, F(g_fonts.mono20),
+    r.time = mk_label(r.box, rpad, pad + (dest_h - 26) / 2, time_w, 26, F(g_fonts.mono20),
                       first ? T_CHALK : T_TIME2);
     r.dest = mk_label(r.box, text_x, pad, plat_x - 14 - text_x, dest_h,
-                      F(first ? g_fonts.sans600_20 : g_fonts.sans500_18),
+                      F(first ? g_fonts.sans600_24 : g_fonts.sans500_22),
                       first ? T_CHALK : T_TITLE2);
     lv_label_set_long_mode(r.dest, LV_LABEL_LONG_MODE_DOTS);
-    r.status = mk_label(r.box, text_x, pad + dest_h + 2, ROW_W - rpad - text_x, 20,
-                        F(g_fonts.mono15), T_CHALK70);
-    tracked(r.status, 1);
+    // The status is set in Figtree rather than mono: at a size worth reading from the hall a
+    // monospaced "09:04 . Delayed . 10 coaches . SWR" does not fit the row, and this does.
+    r.status = mk_label(r.box, text_x, pad + dest_h + 2, ROW_W - rpad - text_x, status_h,
+                        F(g_fonts.sans500_18), T_CHALK70);
     lv_label_set_long_mode(r.status, LV_LABEL_LONG_MODE_DOTS);
-    r.plat = mk_label(r.box, plat_x, pad + (dest_h - 20) / 2, plat_w, 20, F(g_fonts.mono15),
-                      first ? T_CHALK70 : T_CHALK50);
-    tracked(r.plat, 1);
+    r.plat = mk_label(r.box, plat_x, pad + (dest_h - plat_h) / 2, plat_w, plat_h,
+                      F(g_fonts.sans600_30), first ? T_CHALK : T_CHALK70);
     lv_obj_set_style_text_align(r.plat, LV_TEXT_ALIGN_RIGHT, 0);
     set_hidden(r.box, true);
   }

@@ -56,6 +56,7 @@ esphome:
           hb::g_fonts.clock132 = id(fig600_132)->get_lv_font();
           hb::g_fonts.hero88 = id(fig600_88)->get_lv_font();
           hb::g_fonts.sans600_30 = id(fig600_30)->get_lv_font();
+          hb::g_fonts.sans600_24 = id(fig600_24)->get_lv_font();
           hb::g_fonts.sans600_20 = id(fig600_20)->get_lv_font();
           hb::g_fonts.sans500_22 = id(fig500_22)->get_lv_font();
           hb::g_fonts.sans500_20 = id(fig500_20)->get_lv_font();

@@ -27,6 +27,7 @@ lvgl:
         - label: {id: anchor_fig600_132, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig600_132, hidden: true}
         - label: {id: anchor_fig600_88, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig600_88, hidden: true}
         - label: {id: anchor_fig600_30, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig600_30, hidden: true}
+        - label: {id: anchor_fig600_24, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig600_24, hidden: true}
         - label: {id: anchor_fig600_20, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig600_20, hidden: true}
         - label: {id: anchor_fig500_22, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig500_22, hidden: true}
         - label: {id: anchor_fig500_20, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig500_20, hidden: true}
@@ -615,6 +616,12 @@ font:
     glyphs: &text_glyphs
       - " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
       - "°·–—…"
+  # The destination on the first row of a board.
+  - file: "gfonts://Figtree@600"
+    id: fig600_24
+    size: 24
+    bpp: 4
+    glyphs: *text_glyphs
   - file: "gfonts://Figtree@600"
     id: fig600_20
     size: 20
