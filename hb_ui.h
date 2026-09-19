@@ -1126,6 +1126,20 @@ class PageHost {
     show(0, false);
   }
 
+  // Take the carousel back down so the next attach() builds it again. The device never calls this:
+  // it is here for the host simulator (firmware/sim/), which renders every face in one process and
+  // needs a clean host between them. Order matters: the views and the overlay delete their own
+  // roots, so they go before the host they hang off.
+  void reset() {
+    views_.clear();
+    boot_.reset();
+    if (host_ != nullptr) lv_obj_delete(host_);
+    host_ = nullptr;
+    cur_ = 0;
+    unpaired_ = false;
+    ssid_.clear();
+  }
+
   // Reconcile the pages on screen with the document: reuse by id and type, create what is new,
   // delete what is gone, and stay on the page the user was looking at.
   void set_document(const Document &doc) {

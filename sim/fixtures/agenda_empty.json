@@ -1,0 +1,11 @@
+{
+  "v": 1,
+  "gen": 1789717080,
+  "poll": 60,
+  "tz": "Europe/London",
+  "tzp": "GMT0BST,M3.5.0/1,M10.5.0",
+  "pages": [
+    {"type": "agenda", "id": "dm_000021", "cal": "Household", "asof": 1789716600, "stale": false, "e": []}
+  ],
+  "settings": {"brightness": 90, "tier": "commuter", "name": "Hallway"}
+}

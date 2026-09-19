@@ -1,0 +1,20 @@
+{
+  "v": 1,
+  "gen": 1789717080,
+  "poll": 60,
+  "tz": "Europe/London",
+  "tzp": "GMT0BST,M3.5.0/1,M10.5.0",
+  "pages": [
+    {"type": "generic", "id": "dm_000003", "module": "weather", "title": "Weather", "asof": 1789716600, "stale": false,
+     "rows": [
+       {"i": "partly", "v": "14", "a": "Now", "b": "Cloudy . high 19 . low 11"}
+     ]}
+  ],
+  "settings": {
+    "brightness": 90,
+    "night": {"from": "22:30", "to": "06:30", "brightness": 15},
+    "tier": "commuter",
+    "name": "Hallway",
+    "notice": "Payment failed . renew by 22 Sep"
+  }
+}

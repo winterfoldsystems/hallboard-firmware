@@ -1,0 +1,19 @@
+{
+  "v": 1,
+  "gen": 1789717080,
+  "poll": 60,
+  "tz": "Europe/London",
+  "tzp": "GMT0BST,M3.5.0/1,M10.5.0",
+  "pages": [
+    {"type": "board", "id": "dm_000015", "module": "tube", "title": "Victoria . Victoria line", "mode": "dep",
+     "asof": 1789717140, "stale": false,
+     "rows": [
+       {"t": "08:41", "d": "Brixton", "p": "", "s": "Victoria line to Brixton", "c": "G", "e": "Due", "id": "tfl:1001"},
+       {"t": "08:43", "d": "Walthamstow Central", "p": "", "s": "Victoria line to Walthamstow Central", "c": "G", "e": "2 min", "id": "tfl:1002"},
+       {"t": "08:45", "d": "Brixton", "p": "", "s": "Victoria line . minor delays", "c": "Y", "e": "4 min", "id": "tfl:1003"},
+       {"t": "08:47", "d": "Walthamstow Central", "p": "", "s": "Victoria line to Walthamstow Central", "c": "G", "e": "6 min", "id": "tfl:1004"},
+       {"t": "08:50", "d": "Brixton", "p": "", "s": "Victoria line to Brixton", "c": "G", "e": "9 min", "id": "tfl:1005"}
+     ]}
+  ],
+  "settings": {"brightness": 90, "tier": "commuter", "name": "Hallway"}
+}

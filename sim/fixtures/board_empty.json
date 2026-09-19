@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "gen": 1789717080,
+  "poll": 60,
+  "tz": "Europe/London",
+  "tzp": "GMT0BST,M3.5.0/1,M10.5.0",
+  "pages": [
+    {"type": "board", "id": "dm_000013", "module": "rail", "title": "Farncombe to Waterloo", "mode": "dep",
+     "asof": 1789717080, "stale": false, "rows": []}
+  ],
+  "settings": {"brightness": 90, "tier": "commuter", "name": "Hallway"}
+}

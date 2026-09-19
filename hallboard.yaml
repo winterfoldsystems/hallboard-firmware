@@ -32,6 +32,7 @@ esphome:
   friendly_name: HallBoard
   includes:
     - hb_ui.h
+    - hb_parse.h
     - trainboard_logic.h
     - stations.h
   on_boot:

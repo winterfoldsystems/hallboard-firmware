@@ -1,0 +1,7 @@
+# Fetched by the Makefile, pinned by tag and by fonts.sha256, so none of it belongs in git.
+# Anchored to this directory: stubs/esphome/components/lvgl/ is source and must stay.
+/lvgl/
+/fonts/
+# Build output and the rendered faces.
+/build/
+/out/

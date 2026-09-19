@@ -1,0 +1,19 @@
+{
+  "v": 1,
+  "gen": 1789717080,
+  "poll": 60,
+  "tz": "Europe/London",
+  "tzp": "GMT0BST,M3.5.0/1,M10.5.0",
+  "pages": [
+    {"type": "board", "id": "dm_000011", "module": "rail", "title": "Farncombe to Waterloo", "mode": "dep",
+     "asof": 1789717080, "stale": false,
+     "rows": [
+       {"t": "08:47", "d": "London Waterloo", "p": "2", "s": "Cancelled . no train service", "c": "R", "e": "", "id": "svc_1"},
+       {"t": "08:56", "d": "London Waterloo", "p": "2", "s": "Delayed . 10 coaches . SWR", "c": "Y", "e": "09:04", "id": "svc_2"},
+       {"t": "09:02", "d": "Guildford", "p": "", "s": "Platform not yet known . GWR", "c": "W", "e": "", "id": "svc_3"},
+       {"t": "09:17", "d": "London Waterloo", "p": "2", "s": "On time . 8 coaches . SWR", "c": "G", "e": "", "id": "svc_4"},
+       {"t": "09:26", "d": "London Waterloo", "p": "2", "s": "On time . 10 coaches . SWR", "c": "G", "e": "", "id": "svc_5"}
+     ]}
+  ],
+  "settings": {"brightness": 90, "tier": "commuter", "name": "Hallway"}
+}

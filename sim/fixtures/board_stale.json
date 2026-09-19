@@ -1,0 +1,17 @@
+{
+  "v": 1,
+  "gen": 1789717080,
+  "poll": 60,
+  "tz": "Europe/London",
+  "tzp": "GMT0BST,M3.5.0/1,M10.5.0",
+  "pages": [
+    {"type": "board", "id": "dm_000012", "module": "rail", "title": "Arrivals at Farncombe", "mode": "arr",
+     "asof": 1789708500, "stale": true,
+     "rows": [
+       {"t": "08:41", "d": "London Waterloo", "p": "1", "s": "On time . left Waterloo 07:52", "c": "G", "e": "", "id": "svc_6"},
+       {"t": "08:58", "d": "Portsmouth Harbour", "p": "2", "s": "Delayed . left 07:44, due 08:12", "c": "Y", "e": "09:06", "id": "svc_7"},
+       {"t": "09:11", "d": "London Waterloo", "p": "1", "s": "On time . left Waterloo 08:22", "c": "G", "e": "", "id": "svc_8"}
+     ]}
+  ],
+  "settings": {"brightness": 90, "tier": "commuter", "name": "Hallway"}
+}

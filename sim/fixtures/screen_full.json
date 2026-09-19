@@ -1,0 +1,54 @@
+{
+  "v": 1,
+  "gen": 1789717080,
+  "poll": 60,
+  "tz": "Europe/London",
+  "tzp": "GMT0BST,M3.5.0/1,M10.5.0",
+  "pages": [
+    {"type": "board", "id": "dm_000001", "module": "rail", "title": "Farncombe to Waterloo", "mode": "dep",
+     "asof": 1789717080, "stale": false,
+     "rows": [
+       {"t": "08:47", "d": "London Waterloo", "p": "2", "s": "On time . 8 coaches . SWR", "c": "G", "e": "", "id": "svc_1"},
+       {"t": "08:56", "d": "London Waterloo", "p": "2", "s": "Delayed . 10 coaches . SWR", "c": "Y", "e": "09:04", "id": "svc_2"},
+       {"t": "09:02", "d": "Guildford", "p": "1", "s": "On time . 5 coaches . GWR", "c": "G", "e": "", "id": "svc_3"},
+       {"t": "09:17", "d": "London Waterloo", "p": "2", "s": "On time . 8 coaches . SWR", "c": "G", "e": "", "id": "svc_4"},
+       {"t": "09:26", "d": "London Waterloo", "p": "2", "s": "On time . 10 coaches . SWR", "c": "G", "e": "", "id": "svc_5"}
+     ]},
+    {"type": "agenda", "id": "dm_000002", "cal": "Household", "asof": 1789716600, "stale": false,
+     "e": [
+       {"d": "20260918", "w": "Fri 18 Sept", "t": "", "u": "", "s": "Bin day", "l": "", "a": 1},
+       {"d": "20260918", "w": "Fri 18 Sept", "t": "08:00", "u": "08:30", "s": "Early call", "l": "", "a": 0},
+       {"d": "20260918", "w": "Fri 18 Sept", "t": "09:30", "u": "10:15", "s": "Standup", "l": "", "a": 0},
+       {"d": "20260918", "w": "Fri 18 Sept", "t": "16:15", "u": "17:00", "s": "Dentist", "l": "High St", "a": 0},
+       {"d": "20260919", "w": "Sat 19 Sept", "t": "", "u": "", "s": "Dad's birthday", "l": "", "a": 1},
+       {"d": "20260919", "w": "Sat 19 Sept", "t": "10:00", "u": "12:00", "s": "Swimming", "l": "Leisure Centre", "a": 0},
+       {"d": "20260921", "w": "Mon 21 Sept", "t": "08:30", "u": "09:00", "s": "School run", "l": "", "a": 0},
+       {"d": "20260921", "w": "Mon 21 Sept", "t": "09:15", "u": "17:00", "s": "Offsite", "l": "Reading", "a": 0},
+       {"d": "20260923", "w": "Wed 23 Sept", "t": "", "u": "", "s": "Passport renewal", "l": "", "a": 1}
+     ]},
+    {"type": "generic", "id": "dm_000003", "module": "weather", "title": "Weather", "asof": 1789716600, "stale": false,
+     "rows": [
+       {"i": "partly", "v": "14", "a": "Now", "b": "Cloudy . high 19 . low 11"},
+       {"i": "cloud", "v": "15", "a": "10:00", "b": "Cloudy"},
+       {"i": "rain", "v": "17", "a": "13:00", "b": "Light rain"},
+       {"i": "rain", "v": "18", "a": "16:00", "b": "Light rain"},
+       {"i": "partly", "v": "16", "a": "19:00", "b": "Partly cloudy"},
+       {"i": "night", "v": "12", "a": "22:00", "b": "Clear"},
+       {"i": "sun", "v": "21", "a": "Sat", "b": "Sunny . high 21 . low 12"}
+     ]},
+    {"type": "generic", "id": "dm_000004", "module": "reminders", "title": "To-do", "asof": 1789716600, "stale": false,
+     "rows": [
+       {"i": "bell", "v": "0", "a": "Put the bins out", "b": "today"},
+       {"i": "bell", "v": "1", "a": "Book the boiler service", "b": "1 day"},
+       {"i": "bell", "v": "4", "a": "Renew the parking permit", "b": "4 days"},
+       {"i": "bell", "v": "0", "a": "Return the library books", "b": "overdue"},
+       {"i": "bell", "v": "", "a": "Milk", "b": ""}
+     ]}
+  ],
+  "settings": {
+    "brightness": 90,
+    "night": {"from": "22:30", "to": "06:30", "brightness": 15},
+    "tier": "commuter",
+    "name": "Hallway"
+  }
+}
