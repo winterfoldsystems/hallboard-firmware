@@ -10,9 +10,9 @@
 # password. Credentials are saved in flash. Holding the button 8 to 15 s is a factory reset: the
 # whole NVS partition is erased, so the device secret, the claim and the saved Wi-Fi network all
 # go and the board comes back as if it had never been set up. That is what makes a unit safe to
-# hand on. Settings in NVS are encrypted under a key the chip derives from an eFuse HMAC key
-# (see the esp32 block below), which protects them against the flash being read directly; USB
-# reflashing stays open on every unit, so a program loaded over USB can still decrypt them.
+# hand on. NVS encryption (a key the chip derives from an eFuse HMAC key) is parked, not
+# rejected: the block that turns it on is in docs/operations.md with its desk checklist, and it
+# ships in a release of its own because the first boot of such an image wipes saved settings once.
 #
 # From Phase 1c the board updates itself: it asks GET /v1/device/firmware for a manifest, streams
 # the offered image into the spare app slot over TLS, checks its SHA-256, and reboots into it. The
@@ -151,29 +151,6 @@ esp32:
   framework:
     advanced:
       enable_ota_rollback: true
-      # Everything the board keeps between boots lives in NVS: the device secret, the claim and
-      # the saved Wi-Fi network. Encrypt it. The two NVS keys are derived at
-      # runtime by the HMAC peripheral from a 256-bit key held in eFuse key block 0, which the
-      # chip fills with random bytes on the first boot of an image built this way and then
-      # read-protects. No key material is in the image, so every unit (and every bring-your-own
-      # board flashed from the portal) ends up with its own.
-      #
-      # Three things to know before changing this line:
-      #   * The eFuse write is permanent. Block 0 cannot be erased, reused or read back
-      #     afterwards, and the build prints a warning saying so.
-      #   * Turning encryption on, or later off, wipes the saved preferences once, because what
-      #     is already in the partition can no longer be read. A unit taking this release loses
-      #     its Wi-Fi and its pairing once, and only once.
-      #   * That is why there is one image for every unit rather than a plain build and an
-      #     encrypted build for units that are sold: the two cannot be swapped on a board without
-      #     that wipe, so two variants would mean two release channels.
-      #
-      # This is not flash encryption and not Secure Boot; neither is on the roadmap. USB
-      # reflashing stays open deliberately (GPLv3 section 6, and the portal invites people to
-      # flash their own boards), so a program loaded over USB can still read these settings out.
-      # What this defeats is reading the flash chip.
-      nvs_encryption:
-        key_id: 0
 
 # http_request is the only OTA platform in the config: it opens no socket and nothing listens on
 # the device. The install itself is ours (trainboard_logic.h) because ESPHome's flash action is
