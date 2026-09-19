@@ -1779,9 +1779,12 @@ class ListView : public PageView {
       // The item's own text is `a` (docs/screen-document.md); `v` is the day count, and is only
       // worth reading as the title on a page that put the text there instead.
       label_text(r.title, d.a.empty() ? d.value : d.a);
-      std::string due = upper(d.b);
+      // The backend writes it in lower case ("today", "1 day", "overdue"). It is set as the
+      // diary's "All day" is, so it takes a capital and nothing more.
+      std::string due = d.b;
+      if (!due.empty()) due[0] = (char) toupper((unsigned char) due[0]);
       label_text(r.due, due);
-      set_tok(r.due, due.find("OVERDUE") == std::string::npos ? T_CHALK50 : T_LATE);
+      set_tok(r.due, upper(d.b).find("OVERDUE") == std::string::npos ? T_CHALK50 : T_LATE);
       set_hidden(r.box, false);
     }
     if (n > 0) {
@@ -1823,8 +1826,7 @@ class ListView : public PageView {
       r.title = mk_label(r.box, TEXT_X, 16, ROW_W - TEXT_X - PAD - DUE_W - 8, 28,
                          F(g_fonts.sans500_22), T_CHALK);
       lv_label_set_long_mode(r.title, LV_LABEL_LONG_MODE_DOTS);
-      r.due = mk_label(r.box, ROW_W - PAD - DUE_W, 20, DUE_W, 20, F(g_fonts.mono15), T_CHALK50);
-      tracked(r.due, 1);
+      r.due = mk_label(r.box, ROW_W - PAD - DUE_W, 20, DUE_W, 24, F(g_fonts.sans500_18), T_CHALK50);
       lv_obj_set_style_text_align(r.due, LV_TEXT_ALIGN_RIGHT, 0);
       lv_label_set_long_mode(r.due, LV_LABEL_LONG_MODE_DOTS);
       rows_.push_back(r);
