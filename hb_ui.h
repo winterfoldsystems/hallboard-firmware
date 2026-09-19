@@ -1266,8 +1266,8 @@ class BoardView : public PageView {
     lv_obj_t *box = nullptr, *time = nullptr, *dest = nullptr, *status = nullptr, *plat = nullptr;
   };
 
-  // Columns inside a row, measured from the row's own left edge: 16 px of padding, a 62 px time,
-  // a 14 px gap, then the destination over its status, with the platform right-aligned at the
+  // Columns inside a row, measured from the row's own left edge: 16 px of padding, a 72 px time,
+  // a 12 px gap, then the destination over its status, with the platform right-aligned at the
   // far end. The time and the platform both sit on the destination's line rather than the row's
   // middle: the three are read together, and it leaves the status the full width, because the
   // composed status strings are long and the design's own are not. The platform is set as the
@@ -1283,11 +1283,13 @@ class BoardView : public PageView {
     // The third and fourth rows carry a hairline along the top, as the design has them.
     if (i >= 2) mk_rule(r.box, 0, 0, ROW_W, T_LINE);
     // The columns are measured off ROW_W rather than written down, so the row follows the page's
-    // margin: 16 of padding at either end, a 62 px time, a 14 px gap, the platform at the far end.
-    const int rpad = 16, time_w = 62, text_x = 92, plat_w = 72, plat_x = ROW_W - rpad - plat_w;
-    // No tracking on the time, as the design has it: 62 px holds "08:47" at mono 20 and not a
-    // pixel more, which is what makes the column line up down the face.
-    r.time = mk_label(r.box, rpad, pad + (dest_h - 26) / 2, time_w, 26, F(g_fonts.mono20),
+    // margin: 16 of padding at either end, a 72 px time, a 12 px gap, the platform at the far end.
+    const int rpad = 16, time_w = 72, text_x = 100, plat_w = 72, plat_x = ROW_W - rpad - plat_w;
+    // The time is set as the destination is, so the line reads as one. Figtree's figures are not
+    // all one width, so the column is as wide as the widest time ("00:00" at 600/24) and the
+    // destinations start from the same place whatever the time is.
+    r.time = mk_label(r.box, rpad, pad, time_w, dest_h,
+                      F(first ? g_fonts.sans600_24 : g_fonts.sans500_22),
                       first ? T_CHALK : T_TIME2);
     r.dest = mk_label(r.box, text_x, pad, plat_x - 14 - text_x, dest_h,
                       F(first ? g_fonts.sans600_24 : g_fonts.sans500_22),
