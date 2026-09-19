@@ -629,49 +629,51 @@ class PageView {
   int margin_;
 };
 
-// ---- clock: always page one. The short date and a breathing dot on the strip, the time and the
-// long date in the middle, and at the foot the next thing in the diary with the temperature.
+// ---- clock: always page one. The date on the left of the strip and the temperature on its
+// right, the time in the middle, and at the foot the next thing in the diary.
 //
 // Geometry, from ClockFace in the design system with 16 px of padding all round: a 28 px strip
 // at the top and a foot row that ends on the bottom margin, under the page dots when those show.
 // The hairline sits at 424, the foot row runs 440 to 464, and the middle block is centred between
 // the strip (ending at 44) and the hairline. The numerals stand 102 px tall and start 20 px below
-// their label's top, which is what puts the clock label at 152 and the long date under it at 280.
+// their label's top, which is what puts the clock label at 163. The line in the middle of the
+// face is only ever the wait for SNTP, and the numerals are empty while it shows.
 class ClockView : public PageView {
  public:
   explicit ClockView(lv_obj_t *parent) : PageView(parent, "__clock", 'c') {
-    // No strip: the clock underneath is the time and the long date under it is the date.
+    // The strip as every other face has it, without a dot or a hue: the date where a title would
+    // be, and the temperature where the other faces keep the time this one has in the middle.
+    strip_.build(root_, margin_);
 
     // The clock font holds digits and a colon and nothing else, so the label starts empty rather
     // than showing "--:--": four missing glyphs would draw as four boxes.
-    time_ = mk_label(root_, 0, 152, 480, 0, F(g_fonts.clock132), T_CHALK, "");
+    time_ = mk_label(root_, 0, 163, 480, 0, F(g_fonts.clock132), T_CHALK, "");
     lv_obj_set_style_text_align(time_, LV_TEXT_ALIGN_CENTER, 0);
     tracked(time_, -8);
-    date_ = mk_label(root_, 16, 280, 448, 28, F(g_fonts.sans500_20), T_CHALK70, copy::CLOCK_WAITING);
-    lv_obj_set_style_text_align(date_, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_long_mode(date_, LV_LABEL_LONG_MODE_DOTS);
+    waiting_ = mk_label(root_, 16, 220, 448, 28, F(g_fonts.sans500_20), T_CHALK70, copy::CLOCK_WAITING);
+    lv_obj_set_style_text_align(waiting_, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_long_mode(waiting_, LV_LABEL_LONG_MODE_DOTS);
 
     rule_ = mk_rule(root_, 16, 424, 448, T_RAISED);
     dot_ = mk_panel(root_, 16, 447, 9, 9, T_CALENDAR, LV_RADIUS_CIRCLE);
-    line_ = mk_label(root_, 37, 440, 347, 24, F(g_fonts.sans400_18), T_TIME2, "");
+    line_ = mk_label(root_, 37, 440, 427, 24, F(g_fonts.sans400_18), T_TIME2, "");
     lv_label_set_long_mode(line_, LV_LABEL_LONG_MODE_DOTS);
-    temp_ = mk_label(root_, 404, 442, 60, 20, F(g_fonts.mono15), T_CHALK50, "");
-    tracked(temp_, 1);
-    lv_obj_set_style_text_align(temp_, LV_TEXT_ALIGN_RIGHT, 0);
     refresh_foot_();
   }
 
   void tick(esphome::ESPTime now) override {
     if (!now.is_valid()) {
       lv_label_set_text(time_, "");
-      lv_label_set_text(date_, copy::CLOCK_WAITING);
+      strip_.set_left("");
+      set_hidden(waiting_, false);
       last_hm_.clear();
       return;
     }
     if (g_nowhm == last_hm_) return;
     last_hm_ = g_nowhm;
     lv_label_set_text(time_, short_time(g_nowhm).c_str());
-    lv_label_set_text(date_, date_text(now).c_str());
+    strip_.set_left(upper(date_text(now)));
+    set_hidden(waiting_, true);
   }
 
   // 24 hour without a leading zero, as the design has it: "8:41", "17:05".
@@ -691,12 +693,15 @@ class ClockView : public PageView {
   }
 
 
-  // The foot row's two halves, both worked out by PageHost from the document: the next thing in
-  // the diary and the temperature. Either may be empty, and when both are the row goes.
+  // Both worked out by PageHost from the document: the next thing in the diary, for the foot
+  // row, and the temperature, for the right of the strip. Either may be empty.
   void set_line(const std::string &next, const std::string &temp) {
-    if (next == next_text_ && temp == temp_text_) return;
+    if (temp != temp_text_) {
+      temp_text_ = temp;
+      strip_.set_right(temp);
+    }
+    if (next == next_text_) return;
     next_text_ = next;
-    temp_text_ = temp;
     refresh_foot_();
   }
   // A firmware notice ("Updating firmware 12%", "Updated to 1.3.0") takes the foot row for as
@@ -730,7 +735,7 @@ class ClockView : public PageView {
  private:
   // One row at the foot of the face, and three things that want it. A firmware update is the
   // loudest, then the document's notice, then a live problem; while any of them applies the
-  // diary dot and the temperature go and what is left is a grey line.
+  // diary dot goes and what is left is a grey line.
   void refresh_foot_() {
     const std::string &msg = !notice_.empty()       ? notice_
                              : !doc_notice_.empty() ? doc_notice_
@@ -742,23 +747,20 @@ class ClockView : public PageView {
       set_tok(line_, T_CHALK70);
       set_hidden(line_, false);
       set_hidden(dot_, true);
-      set_hidden(temp_, true);
       set_hidden(rule_, false);
       return;
     }
     lv_obj_set_pos(line_, 37, 440);
-    lv_obj_set_width(line_, 347);
+    lv_obj_set_width(line_, 427);
     lv_label_set_text(line_, next_text_.c_str());
     set_tok(line_, T_TIME2);
     set_hidden(line_, next_text_.empty());
     set_hidden(dot_, next_text_.empty());
-    lv_label_set_text(temp_, temp_text_.c_str());
-    set_hidden(temp_, temp_text_.empty());
-    set_hidden(rule_, next_text_.empty() && temp_text_.empty());
+    set_hidden(rule_, next_text_.empty());
   }
 
-  lv_obj_t *time_ = nullptr, *date_ = nullptr, *rule_ = nullptr, *dot_ = nullptr;
-  lv_obj_t *line_ = nullptr, *temp_ = nullptr;
+  lv_obj_t *time_ = nullptr, *waiting_ = nullptr, *rule_ = nullptr, *dot_ = nullptr;
+  lv_obj_t *line_ = nullptr;
   std::string last_hm_, next_text_, temp_text_, notice_, problem_text_, doc_notice_;
 };
 
