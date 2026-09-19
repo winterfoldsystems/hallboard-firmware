@@ -1456,8 +1456,12 @@ class AgendaView : public PageView {
     lv_obj_t *text = nullptr, *rule = nullptr;
   };
 
-  // Today's timed events that have already ended are not the diary any more.
+  // Today's timed events that have already ended are not the diary any more, and neither is
+  // anything on a day before today. The backend never sends one in a document it has just built,
+  // but the document on the wall at midnight was built yesterday, and the day turns here first.
+  // Both days are "YYYYMMDD", so they compare as text.
   static bool spent_(const AgendaEvent &e) {
+    if (g_today.size() == 8 && e.d.size() == 8 && e.d < g_today) return true;
     return !e.all_day && e.d == g_today && !g_nowhm.empty() && e.u.size() == 5 && e.u <= g_nowhm;
   }
 

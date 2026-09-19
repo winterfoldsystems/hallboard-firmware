@@ -17,6 +17,7 @@
      "short": "Farncombe"},
     {"type": "agenda", "id": "dm_000002", "cal": "Household", "asof": 1789717080, "stale": false,
      "e": [
+       {"d": "20260917", "w": "Thu 17 Sept", "t": "18:00", "u": "19:00", "s": "Yesterday, left in a late document", "l": "", "a": 0},
        {"d": "20260918", "w": "Fri 18 Sept", "t": "", "u": "", "s": "Bin day", "l": "", "a": 1},
        {"d": "20260918", "w": "Fri 18 Sept", "t": "08:00", "u": "08:30", "s": "Early call", "l": "", "a": 0},
        {"d": "20260918", "w": "Fri 18 Sept", "t": "09:30", "u": "10:15", "s": "Standup", "l": "Video call", "a": 0},
