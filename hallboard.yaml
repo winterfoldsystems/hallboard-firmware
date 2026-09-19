@@ -1,10 +1,11 @@
 # HallBoard wall display. The ESP32-S3 holds no provider credentials: on first boot it generates
 # its own 64-hex device secret, pairs with the HallBoard backend (a pairing page with a QR code
 # shows on screen until a household claims it), then polls https://api.hallboard.co.uk for one
-# screen document. Every content page is built from that document at runtime by the templates in
-# hb_ui.h: a clock page first, then the household's boards, agenda and modules, all on one
-# horizontal carousel. See docs/api-v1.md and docs/screen-document.md.
-# No secrets file is needed to build.
+# screen document. Every content page is built from that document at runtime by the faces in
+# hb_ui.h: the clock first, then the household's boards, diary, weather and to-do, all on one
+# horizontal carousel in the HallBoard design system (hb_tokens.h holds the palette, hb_copy.h
+# the words). Stations and everything else are set in the portal; the board itself only ever
+# shows. See docs/api-v1.md and docs/screen-document.md. No secrets file is needed to build.
 #
 # Wi-Fi is set up on the device: long-press the side button (0.7 to 6 s), pick a network, type the
 # password. Credentials are saved in flash. Holding the button 8 to 15 s is a factory reset: the
