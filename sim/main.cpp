@@ -291,6 +291,9 @@ const Scenario SCENARIOS[] = {
        hb::g_host.set_unpaired("H7K2M9");
        s.finish_boot();
        s.show(1);
+       // The QR must carry the code in the fragment and nothing else: printed rather than
+       // eyeballed, because a PNG of a QR says nothing about what is in it.
+       fprintf(stderr, "[qr] %s\n", hb::g_host.pair_qr_url().c_str());
      }},
     {"pair-waiting",
      [](Sim &s) {
@@ -303,6 +306,20 @@ const Scenario SCENARIOS[] = {
        s.finish_boot();
        s.show(1);
      }},
+    {"pair-problem",
+     [](Sim &s) {
+       // A code on screen and the network gone: the problem takes the caption slot, which is
+       // where the Wi-Fi line this page used to carry has gone.
+       s.attach();
+       s.network("Home Wi-Fi");
+       s.time_valid = true;
+       s.pump(1000);
+       hb::g_host.set_unpaired("H7K2M9");
+       s.finish_boot();
+       s.show(1);
+       hb::g_host.set_status("Wi-Fi has dropped. Hold the side button.", true);
+       s.pump(200);
+     }},
     {"boot-step1", [](Sim &s) { boot_to(s, BOOT_1); }},
     {"boot-step2", [](Sim &s) { boot_to(s, BOOT_2); }},
     {"boot-step3", [](Sim &s) { boot_to(s, BOOT_3); }},
@@ -313,7 +330,7 @@ const Scenario SCENARIOS[] = {
        // line, because it already says what the household should do about it.
        s.attach();
        s.pump(300);
-       hb::g_host.set_status("No Wi-Fi network saved. Hold the side button to choose one", true);
+       hb::g_host.set_status("No Wi-Fi network saved. Hold the side button.", true);
        s.pump(700);
      }},
 };

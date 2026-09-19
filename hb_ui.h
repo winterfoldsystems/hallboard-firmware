@@ -833,29 +833,32 @@ class ClockView : public PageView {
 
 // ---- pairing: the only page besides the clock while the device is unclaimed. The QR encodes the
 // short-lived code and nothing about the device.
+//
+// Geometry, from PairFace in the design system: 40 px of padding and a centred column with a 24 px
+// gap, the code above the QR tile above the caption. The tile is 200 px rather than the design's
+// 160, so the code still scans from the far side of a hall. There is no title: the mark is on the
+// boot screen and the caption names the site. The column is placed as a block, which is what keeps
+// the waiting state (no code, no tile) centred rather than stranded at the foot of the page.
 class PairingView : public PageView {
  public:
   explicit PairingView(lv_obj_t *parent) : PageView(parent, "__pair", 'p') {
-    lv_obj_t *t = mk_label(root_, 0, 8, 480, 32, F(g_fonts.sans600_20), T_CHALK, "HallBoard");
-    lv_obj_set_style_text_align(t, LV_TEXT_ALIGN_CENTER, 0);
-    // 12 px of chalk quiet zone around a 220 px code, centred in the upper half.
-    quiet_ = mk_panel(root_, 118, 46, 244, 244, T_CHALK, 6);
-    qr_ = lv_qrcode_create(quiet_);
-    lv_qrcode_set_size(qr_, 220);
+    code_ = mk_label(root_, PAD, 0, 480 - 2 * PAD, 0, F(g_fonts.mono64), T_CHALK, "");
+    lv_obj_set_style_text_align(code_, LV_TEXT_ALIGN_CENTER, 0);
+    // 0.12em at 64 px, and no inserted space: the tracking does the separating. LVGL trims the
+    // trailing letter space before it centres a line (lv_text.c), so the design's compensating
+    // left padding is not wanted here, it would push the code half a tracking unit right.
+    tracked(code_, 8);
+    // The quiet zone is part of the tile: 12 px of chalk around the code, inside 200 px of it.
+    tile_ = mk_panel(root_, (480 - TILE) / 2, 0, TILE, TILE, T_CHALK, 16);
+    qr_ = lv_qrcode_create(tile_);
+    lv_qrcode_set_size(qr_, TILE - 2 * QUIET);
     lv_qrcode_set_dark_color(qr_, col(T_NIGHT));
     lv_qrcode_set_light_color(qr_, col(T_CHALK));
-    lv_obj_set_pos(qr_, 12, 12);
-    code_ = mk_label(root_, 0, 300, 480, 0, F(g_fonts.mono64), T_CHALK, "");
-    lv_obj_set_style_text_align(code_, LV_TEXT_ALIGN_CENTER, 0);
-    tracked(code_, 8);
-    hint_lbl_ = mk_label(root_, 24, 396, 432, 26, F(g_fonts.sans500_18), T_CHALK70,
-                         "Scan or enter this code at www.hallboard.co.uk");
-    lv_obj_set_style_text_align(hint_lbl_, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_long_mode(hint_lbl_, LV_LABEL_LONG_MODE_DOTS);
-    wifi_ = mk_label(root_, 24, 430, 432, 24, F(g_fonts.mono15), T_CHALK50, "");
-    tracked(wifi_, 1);
-    lv_obj_set_style_text_align(wifi_, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_long_mode(wifi_, LV_LABEL_LONG_MODE_DOTS);
+    lv_obj_set_pos(qr_, QUIET, QUIET);
+    caption_ = mk_label(root_, (480 - CAPTION_W) / 2, 0, CAPTION_W, 0, F(g_fonts.sans500_22),
+                        T_CHALK70, "");
+    lv_obj_set_style_text_align(caption_, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_long_mode(caption_, LV_LABEL_LONG_MODE_WRAP);
     set_code("");
   }
 
@@ -871,25 +874,74 @@ class PairingView : public PageView {
     if (code_shown_ == code) return;
     code_shown_ = code;
     if (code.size() != 6) {
-      set_hidden(quiet_, true);
+      qr_url_.clear();
+      set_hidden(tile_, true);
+      set_hidden(code_, true);
       lv_label_set_text(code_, "");
-      lv_label_set_text(hint_lbl_, "Waiting for a pairing code...");
-      return;
+    } else {
+      // The code rides in the fragment: the portal reads it in the browser and it never
+      // reaches a server log line.
+      qr_url_ = "https://www.hallboard.co.uk/pair#code=" + code;
+      lv_qrcode_update(qr_, qr_url_.c_str(), (uint32_t) qr_url_.size());
+      set_hidden(tile_, false);
+      set_hidden(code_, false);
+      lv_label_set_text(code_, code.c_str());
     }
-    // The code rides in the fragment: the portal reads it in the browser and it never
-    // reaches a server log line.
-    std::string url = "https://www.hallboard.co.uk/pair#code=" + code;
-    lv_qrcode_update(qr_, url.c_str(), (uint32_t) url.size());
-    set_hidden(quiet_, false);
-    lv_label_set_text(code_, (code.substr(0, 3) + " " + code.substr(3)).c_str());
-    lv_label_set_text(hint_lbl_, "Scan or enter this code at www.hallboard.co.uk");
+    refresh_caption_();
   }
 
-  void set_status(const std::string &msg, bool problem) override { lv_label_set_text(wifi_, msg.c_str()); }
+  // A problem takes the caption for as long as it lasts, which is where the Wi-Fi line this page
+  // used to carry has gone. An informational status is dropped, as it is on a content face.
+  void set_status(const std::string &msg, bool problem) override {
+    if (!problem || problem_ == msg) return;
+    problem_ = msg;
+    refresh_caption_();
+  }
+
+  // What the QR carries. The host simulator prints it so the fragment contract stays checked;
+  // nothing on the device reads it, and it is never logged.
+  const std::string &qr_url() const { return qr_url_; }
 
  private:
-  lv_obj_t *quiet_ = nullptr, *qr_ = nullptr, *code_ = nullptr, *hint_lbl_ = nullptr, *wifi_ = nullptr;
+  static const int PAD = 40, TILE = 200, QUIET = 12, GAP = 24;
+  // The design's 360, widened to the full content width. LVGL breaks a line at a full stop as
+  // readily as at a space, and at 360 that split hallboard.co.uk across two lines.
+  static const int CAPTION_W = 400;
+  static constexpr const char *SCAN = "Scan, or type it at hallboard.co.uk/pair";
+  static constexpr const char *WAITING = "Getting a pairing code.";
+
+  // One slot, and three things that want it: a problem first, then the caption for whichever of
+  // the two states the page is in.
+  void refresh_caption_() {
+    const char *text = WAITING;
+    if (!problem_.empty())
+      text = problem_.c_str();
+    else if (code_shown_.size() == 6)
+      text = SCAN;
+    lv_label_set_text(caption_, text);
+    relayout_();
+  }
+
+  // The column is centred as a block, so what is on screen is what decides where it starts. Both
+  // the code and the caption are as tall as their text, which is why the heights are read back.
+  void relayout_() {
+    lv_obj_update_layout(root_);
+    bool has_code = !lv_obj_has_flag(code_, LV_OBJ_FLAG_HIDDEN);
+    int total = lv_obj_get_height(caption_);
+    if (has_code) total += lv_obj_get_height(code_) + GAP + TILE + GAP;
+    int y = (480 - total) / 2;
+    if (has_code) {
+      lv_obj_set_y(code_, y);
+      y += lv_obj_get_height(code_) + GAP;
+      lv_obj_set_y(tile_, y);
+      y += TILE + GAP;
+    }
+    lv_obj_set_y(caption_, y);
+  }
+
+  lv_obj_t *tile_ = nullptr, *qr_ = nullptr, *code_ = nullptr, *caption_ = nullptr;
   std::string code_shown_ = "\x01";  // never a valid code, so the first set_code always draws
+  std::string problem_, qr_url_;
 };
 
 // ---- boot: what the board shows from power-on until it is ready. Not a PageView and never in
@@ -914,23 +966,41 @@ class BootView {
     lv_obj_add_flag(root_, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_remove_flag(root_, LV_OBJ_FLAG_GESTURE_BUBBLE);
 
-    logo_ = make_logo_(root_);
-    notice_ = mk_label(root_, 24, 198, 432, 26, F(g_fonts.sans500_18), T_CHALK, "");
+    // The design's column: the 108 px mark, a 36 px gap, then the four steps 12 px apart, centred
+    // on the face. The three lines below it are not in the design's BootFace, so the block is
+    // nudged up by however much the two-line help slot wants, which on this font set is 18 px.
+    const int step_h = lv_font_get_line_height(F(g_fonts.mono16));
+    const int list_h = STEPS * step_h + (STEPS - 1) * STEP_GAP;
+    const int meta_h = lv_font_get_line_height(F(g_fonts.mono15));
+    const int help_h = 2 * lv_font_get_line_height(F(g_fonts.sans400_18));
+    const int support_y = 480 - 16 - meta_h;
+    const int detail_y = support_y - 4 - meta_h;
+    const int help_y = detail_y - 8 - help_h;
+    int top = (480 - (MARK + COL_GAP + list_h)) / 2;
+    const int over = top + MARK + COL_GAP + list_h + 12 - help_y;
+    if (over > 0) top -= over;
+    const int list_y = top + MARK + COL_GAP;
+
+    logo_ = make_logo_(root_, top);
+    // The firmware notice keeps its slot between the mark and the steps.
+    notice_ = mk_label(root_, 40, top + MARK + 6, 400, 0, F(g_fonts.sans400_18), T_CHALK, "");
     lv_obj_set_style_text_align(notice_, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(notice_, LV_LABEL_LONG_MODE_DOTS);
     for (int i = 0; i < STEPS; i++) {
-      steps_[i] = mk_label(root_, 24, 232 + 34 * i, 432, 30, F(g_fonts.mono16), T_PENDING, "");
+      steps_[i] = mk_label(root_, 24, list_y + i * (step_h + STEP_GAP), 432, step_h,
+                           F(g_fonts.mono16), T_PENDING, "");
       lv_obj_set_style_text_align(steps_[i], LV_TEXT_ALIGN_CENTER, 0);
       tracked(steps_[i], 1);
       lv_label_set_long_mode(steps_[i], LV_LABEL_LONG_MODE_DOTS);
     }
-    help_ = mk_label(root_, 24, 372, 432, 54, F(g_fonts.sans400_18), T_CHALK70, "");
+    help_ = mk_label(root_, 40, help_y, 400, help_h, F(g_fonts.sans400_18), T_CHALK70, "");
     lv_obj_set_style_text_align(help_, LV_TEXT_ALIGN_CENTER, 0);
-    detail_ = mk_label(root_, 24, 428, 432, 20, F(g_fonts.mono15), T_CHALK50, "");
+    lv_label_set_long_mode(help_, LV_LABEL_LONG_MODE_WRAP);
+    detail_ = mk_label(root_, 24, detail_y, 432, meta_h, F(g_fonts.mono15), T_CHALK50, "");
     lv_obj_set_style_text_align(detail_, LV_TEXT_ALIGN_CENTER, 0);
     tracked(detail_, 1);
     lv_label_set_long_mode(detail_, LV_LABEL_LONG_MODE_DOTS);
-    support_ = mk_label(root_, 24, 452, 432, 20, F(g_fonts.mono15), T_CHALK50, "");
+    support_ = mk_label(root_, 24, support_y, 432, meta_h, F(g_fonts.mono15), T_CHALK50, "");
     lv_obj_set_style_text_align(support_, LV_TEXT_ALIGN_CENTER, 0);
     tracked(support_, 1);
     lv_label_set_long_mode(support_, LV_LABEL_LONG_MODE_DOTS);
@@ -943,23 +1013,34 @@ class BootView {
     if (root_ != nullptr) lv_obj_delete(root_);
   }
 
-  // The mark. Two letters is all the 50 px face carries; S10 puts them on the violet tile.
-  static lv_obj_t *make_logo_(lv_obj_t *parent) {
-    lv_obj_t *l = mk_label(parent, 0, 136, 480, 0, F(g_fonts.mark50), T_CHALK, "HB");
-    lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_opa(l, LV_OPA_TRANSP, 0);
+  // The mark: a violet tile carrying the two letters the 50 px face holds and the lilac bar under
+  // them, at the design's proportions on a 108 px tile. Opacity is inherited, so fading the tile
+  // fades its two children with it. It rises 24 px and fades in over 400 ms, which is the whole
+  // of this screen's movement.
+  static lv_obj_t *make_logo_(lv_obj_t *parent, int y) {
+    lv_obj_t *tile = mk_panel(parent, (480 - MARK) / 2, y + 24, MARK, MARK, T_VIOLET, 27);
+    const lv_font_t *f = F(g_fonts.mark50);
+    // The design sets the letters at 49.68 px with -0.05em of tracking, which puts their baseline
+    // 69 px down the tile. LVGL hangs a label from the top of its line box, so that is what the
+    // offset is worked back from rather than being written down as a top edge.
+    lv_obj_t *letters = mk_label(tile, 0, 69 - (lv_font_get_line_height(f) - f->base_line), MARK, 0,
+                                 f, T_WHITE, "HB");
+    lv_obj_set_style_text_align(letters, LV_TEXT_ALIGN_CENTER, 0);
+    tracked(letters, -3);
+    mk_panel(tile, 25, 78, 58, 8, T_LIFT, LV_RADIUS_CIRCLE);
+    lv_obj_set_style_opa(tile, LV_OPA_TRANSP, 0);
     lv_anim_t a;
     lv_anim_init(&a);
-    lv_anim_set_var(&a, l);
-    lv_anim_set_duration(&a, 500);
+    lv_anim_set_var(&a, tile);
+    lv_anim_set_duration(&a, 400);
     lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
     lv_anim_set_exec_cb(&a, anim_opa_cb_);
     lv_anim_set_values(&a, LV_OPA_TRANSP, LV_OPA_COVER);
     lv_anim_start(&a);
     lv_anim_set_exec_cb(&a, anim_y_cb_);
-    lv_anim_set_values(&a, 136, 120);
+    lv_anim_set_values(&a, y + 24, y);
     lv_anim_start(&a);
-    return l;
+    return tile;
   }
 
   lv_obj_t *root() const { return root_; }
@@ -1002,7 +1083,7 @@ class BootView {
       // Whatever the Wi-Fi trouble is, the status string already says what to do about it.
       set_help_(msg);
     } else if (problems_ >= 2) {
-      set_help_("Cannot reach hallboard.co.uk, retrying...");
+      set_help_("Cannot reach hallboard.co.uk. Trying again.");
       set_detail_(msg);
     }
   }
@@ -1016,45 +1097,45 @@ class BootView {
     if ((int32_t) (now - hold_until_) < 0) return;
     switch (step_) {
       case S_WIFI:
-        if (!started_) return begin_step_(0, "Connecting to Wi-Fi...");
+        if (!started_) return begin_step_(0, "Connecting to Wi-Fi");
         if (have_net_) {
-          finish_step_(0, "Wi-Fi connected");
+          finish_step_(0, "Connected to Wi-Fi");
           return advance_(S_CONTENT);
         }
         // Twenty seconds without a network and the household needs telling how to fix it. A
         // status string that already said so wins: it is more specific than this one.
         if (help_text_.empty() && (int32_t) (now - t0_) > 20000)
-          set_help_("Still looking for Wi-Fi... hold the side button to choose a network");
+          set_help_("Still looking for Wi-Fi. Hold the side button.");
         return;
       case S_CONTENT:
-        if (!started_) return begin_step_(1, "Downloading content...");
+        if (!started_) return begin_step_(1, "Fetching your pages");
         if (unpaired_) {
-          finish_step_(1, "Content loaded");
+          finish_step_(1, "Pages loaded");
           return advance_(S_PAIR);
         }
         if (have_doc_) {
-          finish_step_(1, "Content loaded");
+          finish_step_(1, "Pages loaded");
           content_at_ = now;
           return advance_(S_TIME);
         }
         return;
       case S_TIME:
-        if (!started_) return begin_step_(2, "Syncing time...");
+        if (!started_) return begin_step_(2, "Setting the clock");
         if (have_time_) {
-          finish_step_(2, "Time synced");
+          finish_step_(2, "Clock set");
           return advance_(S_READY);
         }
-        // SNTP is not worth waiting on: the clock page says "Waiting for time..." instead.
+        // SNTP is not worth waiting on: the clock page carries the waiting line instead.
         if ((int32_t) (now - content_at_) > 30000) {
-          set_help_("Time not synced yet");
+          set_help_("The clock is not set yet.");
           return advance_(S_READY);
         }
         return;
       case S_READY:
-        if (!started_) return begin_step_(3, "Ready to use", true, true);
+        if (!started_) return begin_step_(3, "Ready");
         return start_fade_();
       case S_PAIR:
-        if (!started_) return begin_step_(3, "Pair this board", true);
+        if (!started_) return begin_step_(3, "Pair this board");
         return start_fade_();
       default:
         return;
@@ -1064,19 +1145,20 @@ class BootView {
  private:
   enum Step { S_WIFI = 0, S_CONTENT, S_TIME, S_READY, S_PAIR, S_FADING };
   static const int STEPS = 4;
+  static const int MARK = 108, COL_GAP = 36, STEP_GAP = 12;
   static const uint32_t HOLD_MS = 600;
 
-  // Each of these writes exactly one line and holds the next transition for 600 ms. A finished
-  // step is marked by its colour alone: the tick glyph belonged to Montserrat, which the mono
-  // face the steps are set in does not carry.
-  void begin_step_(int i, const char *text, bool done = false, bool ticked = false) {
-    set_tok(steps_[i], ticked ? T_OK : (done ? T_CHALK : T_TITLE2));
+  // Each of these writes exactly one line and holds the next transition for 600 ms. The three
+  // states are told apart by colour alone, as the design has them: there is no tick glyph, and
+  // the one that belonged to Montserrat is not in the mono face the steps are set in.
+  void begin_step_(int i, const char *text) {
+    set_tok(steps_[i], T_TITLE2);
     lv_label_set_text(steps_[i], text);
     started_ = true;
     hold_until_ = last_now_ + HOLD_MS;
   }
   void finish_step_(int i, const char *text) {
-    set_tok(steps_[i], T_OK);
+    set_tok(steps_[i], T_CHALK50);
     lv_label_set_text(steps_[i], text);
     hold_until_ = last_now_ + HOLD_MS;
   }
@@ -2132,6 +2214,14 @@ class PageHost {
   size_t current() const { return cur_; }
   size_t count() const { return views_.size(); }
   bool unpaired() const { return unpaired_; }
+
+  // What the pairing QR carries, empty when there is no pairing page or no code yet. The host
+  // simulator prints it so the fragment contract stays checked; the device never logs it.
+  std::string pair_qr_url() const {
+    for (const auto &v : views_)
+      if (v && v->type() == 'p') return static_cast<const PairingView *>(v.get())->qr_url();
+    return "";
+  }
   uint32_t object_count() const { return host_ == nullptr ? 0 : lv_obj_get_child_count(host_); }
 
   PageView *view(size_t i) const { return i < views_.size() ? views_[i].get() : nullptr; }

@@ -108,7 +108,7 @@ esphome:
           if (wifi::global_wifi_component->has_sta()) {
             hb::g_host.set_status("Connecting to Wi-Fi...");
           } else {
-            hb::g_host.set_status("No Wi-Fi configured · hold the side button", true);
+            hb::g_host.set_status("No Wi-Fi network saved. Hold the side button.", true);
             id(ev).execute("BUTTONLONG");
           }
           // A factory reset is a very long hold; the 0.7 to 6 s band in hardware.yaml opens Wi-Fi
@@ -188,7 +188,7 @@ wifi:
         id(next_poll_at) = millis();
   on_disconnect:
     - lambda: |-
-        hb::g_host.set_status("Wi-Fi disconnected · hold the side button for Wi-Fi setup", true);
+        hb::g_host.set_status("Wi-Fi has dropped. Hold the side button.", true);
 
 improv_serial:
 
