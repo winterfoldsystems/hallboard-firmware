@@ -1644,7 +1644,7 @@ class SkyView : public PageView {
   // and a bar area of 60. The six columns measure 400 on a 68 pitch, which is what centres them
   // in the 448 card. The card is taller than the design's 128 because a rasterised 16 px label
   // and a 14 px one need more room than the mock's line boxes did.
-  static const int COLS = 6, COL_W = 60, COL_PITCH = 68, CARD_PAD = 24, BAR_MAX = 60, BAR_MIN = 22, SEP = 9;
+  static const int COLS = 6, COL_W = 60, COL_PITCH = 68, CARD_PAD = 24, BAR_MAX = 60, BAR_MIN = 22, SEP = 9, RAIN_GAP = 6;
 
   struct Col {
     lv_obj_t *root = nullptr, *temp = nullptr, *bar = nullptr, *hour = nullptr, *rain = nullptr;
@@ -1653,7 +1653,10 @@ class SkyView : public PageView {
   void build_strip_() {
     int th = lv_font_get_line_height(F(g_fonts.sans500_16));
     int hh = lv_font_get_line_height(F(g_fonts.sans500_16));
-    int inner = th + 6 + BAR_MAX + 6 + hh + SEP + hh;
+    // Top to bottom: the chances of rain, a hairline, the temperatures riding on their bars, and
+    // the hours along the foot. `top` is where the bar area's own column starts.
+    int top = hh + SEP + RAIN_GAP;
+    int inner = top + th + 6 + BAR_MAX + 6 + hh;
     card_h_ = inner + 2 * CARD_PAD;
     card_y_ = 480 - margin_ - card_h_;
     card_ = mk_panel(root_, margin_, card_y_, TEXT_W, card_h_, T_CARD, 16);
@@ -1661,20 +1664,19 @@ class SkyView : public PageView {
     for (int i = 0; i < COLS; i++) {
       Col &c = cols_[i];
       c.root = mk_obj(card_, CARD_PAD + COL_PITCH * i, CARD_PAD, COL_W, inner);
-      c.temp = mk_label(c.root, 0, 0, COL_W, th, F(g_fonts.sans500_16), T_HEADLINE, "");
+      c.rain = mk_label(c.root, 0, 0, COL_W, hh, F(g_fonts.sans500_16), T_HOUR, "");
+      lv_obj_set_style_text_align(c.rain, LV_TEXT_ALIGN_CENTER, 0);
+      c.temp = mk_label(c.root, 0, top, COL_W, th, F(g_fonts.sans500_16), T_HEADLINE, "");
       lv_obj_set_style_text_align(c.temp, LV_TEXT_ALIGN_CENTER, 0);
       // Anchored at the bottom of the bar area, which is what makes a row of bars a chart.
-      c.bar = mk_panel(c.root, 0, th + 6, COL_W, BAR_MAX, T_WEATHER, 4);
-      c.hour = mk_label(c.root, 0, th + 12 + BAR_MAX, COL_W, hh, F(g_fonts.sans500_16), T_HOUR, "");
+      c.bar = mk_panel(c.root, 0, top + th + 6, COL_W, BAR_MAX, T_WEATHER, 4);
+      c.hour = mk_label(c.root, 0, top + th + 12 + BAR_MAX, COL_W, hh, F(g_fonts.sans500_16), T_HOUR, "");
       lv_obj_set_style_text_align(c.hour, LV_TEXT_ALIGN_CENTER, 0);
-      c.rain = mk_label(c.root, 0, th + 12 + BAR_MAX + hh + SEP, COL_W, hh, F(g_fonts.sans500_16), T_HOUR, "");
-      lv_obj_set_style_text_align(c.rain, LV_TEXT_ALIGN_CENTER, 0);
       set_hidden(c.root, true);
     }
-    // One hairline across the six columns, between the hours and the chances of rain under them.
-    mk_rule(card_, CARD_PAD, CARD_PAD + th + 12 + BAR_MAX + hh + SEP / 2, COL_PITCH * (COLS - 1) + COL_W,
-            T_LINE);
-    bar_top_ = th + 6;
+    // One hairline across the six columns, under the chances of rain.
+    mk_rule(card_, CARD_PAD, CARD_PAD + hh + SEP / 2, COL_PITCH * (COLS - 1) + COL_W, T_LINE);
+    bar_top_ = top + th + 6;
     temp_h_ = th;
   }
 
@@ -1684,7 +1686,8 @@ class SkyView : public PageView {
   // height and the coldest about a third of it, so the strip reads as a day warming and cooling,
   // and each number rides on top of its bar. The brightness says the same thing again, the
   // warmest hour the full hue and the coldest a third of it. The chance of rain is a small
-  // percentage under the hour, across a hairline, in the weather hue from half a chance up.
+  // percentage along the top of the card, over a hairline, in the weather hue from half a chance
+  // up.
   void fill_strip_(const std::vector<HourSlot> &hours) {
     int focus = 0, lo = 0, hi = 0;
     bool any = false, found = false;
