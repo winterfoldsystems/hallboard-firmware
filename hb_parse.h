@@ -17,11 +17,21 @@ namespace tb {
 // ---------------------------------------------------------------- JSON helpers
 // Every string taken out of a document is truncated: the device renders fixed-width labels and a
 // malformed or oversized document must not be able to grow the heap without bound.
+//
+// It is also filtered down to printable ASCII. The backend sends nothing else (see
+// docs/screen-document.md), so a byte at 0x80 or above is either a mistake or someone trying it
+// on, and either way it would draw as a hollow box or exercise a glyph the font was never built
+// with. Control characters go the same way: a newline would re-flow a label and the rest are not
+// text at all. Only `limit` characters are ever kept, so the cap still holds.
 template<typename T> inline std::string jstr(T v, size_t limit) {
   const char *s = v.template as<const char *>();
   if (!s) return "";
-  std::string o(s);
-  if (o.size() > limit) o.resize(limit);
+  std::string o;
+  for (const char *p = s; *p != '\0' && o.size() < limit; p++) {
+    unsigned char c = (unsigned char) *p;
+    if (c < 0x20 || c >= 0x7F) continue;
+    o += (char) c;
+  }
   return o;
 }
 template<typename T> inline uint32_t juint(T v) { return v.template as<uint32_t>(); }
@@ -30,7 +40,8 @@ template<typename T> inline bool jbool(T v) { return v.template as<bool>(); }
 // ---------------------------------------------------------------- screen document (docs/screen-document.md)
 // Parses a document into an hb::Document. Unknown page types and unknown fields are ignored, as
 // the contract requires, and every list is capped: 8 pages, 5 board rows, 60 events, 8 generic
-// rows, with every string truncated by jstr. A malformed document cannot grow the heap.
+// rows, 6 weather hours, with every string truncated by jstr. A malformed document cannot grow
+// the heap.
 inline bool parse_screen(const std::string &body, hb::Document &out) {
   JsonDocument doc = esphome::json::parse_json(body);
   if (doc.isNull()) return false;
@@ -38,7 +49,7 @@ inline bool parse_screen(const std::string &body, hb::Document &out) {
   if (juint(root["v"]) != 1) return false;
   if (!root["pages"].is<JsonArray>()) return false;
 
-  const size_t MAX_PAGES = 8, MAX_ROWS = 5, MAX_EVENTS = 60, MAX_GROWS = 8;
+  const size_t MAX_PAGES = 8, MAX_ROWS = 5, MAX_EVENTS = 60, MAX_GROWS = 8, MAX_HOURS = 6;
   out = hb::Document();
   out.gen = juint(root["gen"]);
   out.tz = jstr(root["tz"], 40);
@@ -72,6 +83,9 @@ inline bool parse_screen(const std::string &body, hb::Document &out) {
         r.uid = jstr(rw["id"], 48);
         p.rows.push_back(r);
       }
+      // The board in one name, for the header. Absent on a backend older than 1.4.0, and absent
+      // whenever the rows carry no name to shorten, so the title is still the fallback.
+      p.short_title = jstr(pg["short"], 24);
     } else if (!strcmp(type, "agenda")) {
       p.type = 'a';
       p.title = jstr(pg["cal"], 24);
@@ -103,6 +117,24 @@ inline bool parse_screen(const std::string &body, hb::Document &out) {
         r.a = jstr(rw["a"], 40);
         r.b = jstr(rw["b"], 64);
         p.grows.push_back(r);
+      }
+      // The weather face's own fields, which sit beside `rows` on the weather page and are
+      // absent everywhere else. Every one is optional; an empty string is how a face knows the
+      // provider sent nothing.
+      p.place = jstr(pg["place"], 24);
+      p.temp = jstr(pg["temp"], 6);
+      p.feels = jstr(pg["feels"], 6);
+      p.head = jstr(pg["head"], 24);
+      p.sent = jstr(pg["sent"], 64);
+      JsonArray hours = pg["hours"].as<JsonArray>();
+      for (JsonObject hr : hours) {
+        if (p.hours.size() >= MAX_HOURS) break;
+        hb::HourSlot h;
+        h.h = jstr(hr["h"], 2);
+        h.t = jstr(hr["t"], 6);
+        int r = hr["r"].is<int>() ? hr["r"].as<int>() : 0;
+        h.r = r < 0 ? 0 : (r > 100 ? 100 : r);
+        p.hours.push_back(std::move(h));
       }
     } else {
       continue;   // a page type this firmware does not know is skipped, not an error

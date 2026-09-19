@@ -12,7 +12,8 @@
        {"t": "08:44", "d": "Crystal Palace", "p": "3", "s": "towards Crystal Palace", "c": "G", "e": "3 min", "id": "tfl:1429"},
        {"t": "08:48", "d": "Streatham Hill", "p": "133", "s": "towards Streatham", "c": "G", "e": "7 min", "id": "tfl:1430"},
        {"t": "08:53", "d": "Tooting", "p": "355", "s": "towards Tooting", "c": "G", "e": "12 min", "id": "tfl:1431"}
-     ]}
+     ],
+     "short": "Brixton Station"}
   ],
   "settings": {"brightness": 90, "tier": "commuter", "name": "Hallway"}
 }

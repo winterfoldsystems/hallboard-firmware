@@ -13,7 +13,8 @@
        {"t": "09:02", "d": "Guildford", "p": "", "s": "Platform not yet known . GWR", "c": "W", "e": "", "id": "svc_3"},
        {"t": "09:17", "d": "London Waterloo", "p": "2", "s": "On time . 8 coaches . SWR", "c": "G", "e": "", "id": "svc_4"},
        {"t": "09:26", "d": "London Waterloo", "p": "2", "s": "On time . 10 coaches . SWR", "c": "G", "e": "", "id": "svc_5"}
-     ]}
+     ],
+     "short": "Farncombe"}
   ],
   "settings": {"brightness": 90, "tier": "commuter", "name": "Hallway"}
 }

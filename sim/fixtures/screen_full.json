@@ -13,7 +13,8 @@
        {"t": "09:02", "d": "Guildford", "p": "1", "s": "On time . 5 coaches . GWR", "c": "G", "e": "", "id": "svc_3"},
        {"t": "09:17", "d": "London Waterloo", "p": "2", "s": "On time . 8 coaches . SWR", "c": "G", "e": "", "id": "svc_4"},
        {"t": "09:26", "d": "London Waterloo", "p": "2", "s": "On time . 10 coaches . SWR", "c": "G", "e": "", "id": "svc_5"}
-     ]},
+     ],
+     "short": "Farncombe"},
     {"type": "agenda", "id": "dm_000002", "cal": "Household", "asof": 1789716600, "stale": false,
      "e": [
        {"d": "20260918", "w": "Fri 18 Sept", "t": "", "u": "", "s": "Bin day", "l": "", "a": 1},
@@ -35,6 +36,16 @@
        {"i": "partly", "v": "16", "a": "19:00", "b": "Partly cloudy"},
        {"i": "night", "v": "12", "a": "22:00", "b": "Clear"},
        {"i": "sun", "v": "21", "a": "Sat", "b": "Sunny . high 21 . low 12"}
+     ],
+     "place": "Godalming", "temp": "14", "feels": "12",
+     "head": "Cloudy, then rain", "sent": "Take the umbrella, rain from about one.",
+     "hours": [
+       {"h": "10", "t": "15", "r": 20},
+       {"h": "12", "t": "17", "r": 45},
+       {"h": "14", "t": "18", "r": 70},
+       {"h": "16", "t": "18", "r": 65},
+       {"h": "18", "t": "16", "r": 30},
+       {"h": "20", "t": "14", "r": 15}
      ]},
     {"type": "generic", "id": "dm_000004", "module": "reminders", "title": "To-do", "asof": 1789716600, "stale": false,
      "rows": [

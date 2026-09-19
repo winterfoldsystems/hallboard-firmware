@@ -51,16 +51,29 @@ struct GenericRow {
   std::string icon, value, a, b;
 };
 
+// One two-hourly slot of the weather page's strip: the hour, the temperature at it and the
+// chance of rain as a percentage.
+struct HourSlot {
+  std::string h, t;
+  int r = 0;
+};
+
 // A page of any type. The three row vectors are a union in spirit: only the one matching `type`
-// is ever filled.
+// is ever filled, and so are the weather fields, which only a generic page carries.
 struct Page {
   char type = 0;  // 'b' board, 'a' agenda, 'g' generic
   std::string id, title, module, mode;
+  // A board in one name, for a header with no room for the whole title. Empty when the backend
+  // had nothing to shorten, in which case the title is what a face shows.
+  std::string short_title;
   uint32_t asof = 0;
   bool stale = false;
   std::vector<BoardRow> rows;
   std::vector<AgendaEvent> events;
   std::vector<GenericRow> grows;
+  // The weather face's own fields, all optional. S7 draws them; the clock uses `temp`.
+  std::string place, temp, feels, head, sent;
+  std::vector<HourSlot> hours;
 };
 
 // Night dimming window. `from` and `to` are local "HH:MM"; from > to wraps past midnight.
@@ -265,16 +278,21 @@ inline bool stale_now(uint32_t asof, bool stale) {
   return g_now_epoch > asof + 300;
 }
 
-// The stamp in the corner of every content face: "LIVE · 08:41", "SHOWING 08:12", "LOADING".
-inline std::string stamp_text(uint32_t asof, bool stale) {
-  if (asof == 0) return "LOADING";
-  time_t t = (time_t) asof;
+// A Unix time as local "HH:MM", for the stamp and the empty card's footer.
+inline std::string hhmm_of(uint32_t when) {
+  time_t t = (time_t) when;
   struct tm lt;
   localtime_r(&t, &lt);
   char buf[8];
   strftime(buf, sizeof buf, "%H:%M", &lt);
+  return buf;
+}
+
+// The stamp in the corner of every content face: "LIVE · 08:41", "SHOWING 08:12", "LOADING".
+inline std::string stamp_text(uint32_t asof, bool stale) {
+  if (asof == 0) return "LOADING";
   // U+00B7, the middle dot the design separates with.
-  return stale_now(asof, stale) ? std::string("SHOWING ") + buf : std::string("LIVE \xC2\xB7 ") + buf;
+  return stale_now(asof, stale) ? "SHOWING " + hhmm_of(asof) : "LIVE \xC2\xB7 " + hhmm_of(asof);
 }
 
 // Uppercase an ASCII string, for the strip's left label and the agenda's day headings. Document
@@ -510,46 +528,61 @@ class PageView {
   int margin_;
 };
 
-// ---- clock: always page one, with the date and, when the document carries a weather page, the
-// first weather row underneath.
+// ---- clock: always page one. The short date and a breathing dot on the strip, the time and the
+// long date in the middle, and at the foot the next thing in the diary with the temperature.
+//
+// Geometry, from ClockFace in the design system: 24 px of padding, a 28 px strip at the top and
+// a foot row that ends 16 px above the page dots. The hairline sits at 403, the foot row runs
+// 419 to 443, and the middle block is centred between the strip (ending at 52) and the hairline.
+// The numerals stand 102 px tall and start 20 px below their label's top, which is what puts the
+// clock label at 146 and the long date under it at 274.
 class ClockView : public PageView {
  public:
   explicit ClockView(lv_obj_t *parent) : PageView(parent, "__clock", 'c') {
-    // The clock font holds digits, a colon, a space and a hyphen and nothing else, so the label
-    // starts empty rather than showing "--:--": four missing glyphs would draw as four boxes.
-    time_ = mk_label(root_, 0, 128, 480, 0, F(g_fonts.clock132), T_CHALK, "");
+    // Nothing goes on the right of the strip: the clock underneath is the time. The lilac dot
+    // breathes over four seconds, which is the whole of this face's movement.
+    strip_.build(root_, margin_);
+    strip_.set_dot(T_LIFT);
+    strip_.set_breathing(true);
+    strip_.set_left("", T_CHALK70);
+
+    // The clock font holds digits and a colon and nothing else, so the label starts empty rather
+    // than showing "--:--": four missing glyphs would draw as four boxes.
+    time_ = mk_label(root_, 0, 146, 480, 0, F(g_fonts.clock132), T_CHALK, "");
     lv_obj_set_style_text_align(time_, LV_TEXT_ALIGN_CENTER, 0);
     tracked(time_, -8);
-    waiting_ = mk_label(root_, 0, 176, 480, 36, F(g_fonts.sans500_20), T_CHALK70, "Waiting for time...");
-    lv_obj_set_style_text_align(waiting_, LV_TEXT_ALIGN_CENTER, 0);
-    date_ = mk_label(root_, 0, 296, 480, 36, F(g_fonts.sans500_20), T_CHALK70, "");
+    date_ = mk_label(root_, 24, 274, 432, 28, F(g_fonts.sans500_20), T_CHALK70, WAITING);
     lv_obj_set_style_text_align(date_, LV_TEXT_ALIGN_CENTER, 0);
-    // Only shown while something is wrong, and only for a problem status or a notice carried by
-    // the document: the clock page is what the household looks at, so it stays a clock until
-    // support (or the backend) needs a line.
-    problem_ = mk_label(root_, 24, 380, 432, 26, F(g_fonts.sans500_18), T_CHALK50, "");
-    lv_obj_set_style_text_align(problem_, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_long_mode(problem_, LV_LABEL_LONG_MODE_DOTS);
-    set_hidden(problem_, true);
-    weather_ = mk_label(root_, 24, 424, 432, 28, F(g_fonts.sans500_18), T_CHALK70, "");
-    lv_obj_set_style_text_align(weather_, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_long_mode(weather_, LV_LABEL_LONG_MODE_DOTS);
+    lv_label_set_long_mode(date_, LV_LABEL_LONG_MODE_DOTS);
+
+    rule_ = mk_rule(root_, 24, 403, 432, T_RAISED);
+    dot_ = mk_panel(root_, 24, 426, 9, 9, T_CALENDAR, LV_RADIUS_CIRCLE);
+    line_ = mk_label(root_, 45, 419, 339, 24, F(g_fonts.sans400_18), T_TIME2, "");
+    lv_label_set_long_mode(line_, LV_LABEL_LONG_MODE_DOTS);
+    temp_ = mk_label(root_, 396, 421, 60, 20, F(g_fonts.mono15), T_CHALK50, "");
+    tracked(temp_, 1);
+    lv_obj_set_style_text_align(temp_, LV_TEXT_ALIGN_RIGHT, 0);
+    refresh_foot_();
   }
 
   void tick(esphome::ESPTime now) override {
     if (!now.is_valid()) {
       lv_label_set_text(time_, "");
-      lv_label_set_text(date_, "");
-      set_hidden(waiting_, false);
+      lv_label_set_text(date_, WAITING);
+      strip_.set_left("", T_CHALK70);
       last_hm_.clear();
       return;
     }
-    set_hidden(waiting_, true);
-    if (g_nowhm != last_hm_) {
-      last_hm_ = g_nowhm;
-      lv_label_set_text(time_, last_hm_.c_str());
-      lv_label_set_text(date_, date_text(now).c_str());
-    }
+    if (g_nowhm == last_hm_) return;
+    last_hm_ = g_nowhm;
+    lv_label_set_text(time_, short_time(g_nowhm).c_str());
+    lv_label_set_text(date_, date_text(now).c_str());
+    strip_.set_left(short_date(now), T_CHALK70);
+  }
+
+  // 24 hour without a leading zero, as the design has it: "8:41", "17:05".
+  static std::string short_time(const std::string &hm) {
+    return (hm.size() == 5 && hm[0] == '0') ? hm.substr(1) : hm;
   }
 
   // "Monday 14 September". Built by hand: newlib's strftime has no day-without-padding format.
@@ -563,58 +596,88 @@ class ClockView : public PageView {
     return std::string(DAYS[dow]) + " " + std::to_string((int) now.day_of_month) + " " + MONTHS[mon];
   }
 
-  void set_weather(const std::string &line) {
-    weather_text_ = line;
-    refresh_line_();
+  // "FRI 18 SEP" for the strip, from the same tick.
+  static std::string short_date(const esphome::ESPTime &now) {
+    static const char *DAYS[] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
+    static const char *MONTHS[] = {"JAN", "FEB", "MAR", "APR", "MAY", "JUN",
+                                   "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"};
+    int dow = (int) now.day_of_week - 1;
+    int mon = (int) now.month - 1;
+    if (dow < 0 || dow > 6 || mon < 0 || mon > 11) return "";
+    return std::string(DAYS[dow]) + " " + std::to_string((int) now.day_of_month) + " " + MONTHS[mon];
   }
-  // A firmware notice ("Updating firmware 12%", "Updated to 1.3.0") takes the weather line for as
+
+  // The foot row's two halves, both worked out by PageHost from the document: the next thing in
+  // the diary and the temperature. Either may be empty, and when both are the row goes.
+  void set_line(const std::string &next, const std::string &temp) {
+    if (next == next_text_ && temp == temp_text_) return;
+    next_text_ = next;
+    temp_text_ = temp;
+    refresh_foot_();
+  }
+  // A firmware notice ("Updating firmware 12%", "Updated to 1.3.0") takes the foot row for as
   // long as it is set, then hands it back. Nothing else interrupts the clock.
   void set_notice(const std::string &msg) {
     if (notice_ == msg) return;
     notice_ = msg;
-    refresh_line_();
-    refresh_problem_();   // a firmware notice holds the document's notice back while it runs
+    refresh_foot_();
   }
-  // The document's own notice, from `settings.notice`. It shares the small grey line with a
-  // problem status, which wins while it lasts, and unlike a problem it survives the next
+  // The document's own notice, from `settings.notice`. Unlike a problem it survives the next
   // document: only another document (or an empty notice in one) takes it away.
   void set_doc_notice(const std::string &msg) {
     if (doc_notice_ == msg) return;
     doc_notice_ = msg;
-    refresh_problem_();
+    refresh_foot_();
   }
-  // Informational statuses are dropped: the clock page stays a clock. A problem is worth a small
-  // grey line, cleared by clear_problem() as soon as a document arrives.
+  // Informational statuses are dropped: the clock page stays a clock. A problem is worth the
+  // foot row, cleared by clear_problem() as soon as a document arrives.
   void set_status(const std::string &msg, bool problem) override {
     if (!problem) return;
     if (problem_text_ == msg) return;
     problem_text_ = msg;
-    refresh_problem_();
+    refresh_foot_();
   }
   void clear_problem() {
     if (problem_text_.empty()) return;
     problem_text_.clear();
-    refresh_problem_();
+    refresh_foot_();
   }
 
  private:
-  void refresh_line_() {
-    lv_label_set_text(weather_, notice_.empty() ? weather_text_.c_str() : notice_.c_str());
-    set_tok(weather_, notice_.empty() ? T_CHALK70 : T_CHALK);
-  }
-  // A live problem first, then the document's notice, and nothing at all while a firmware notice
-  // is on the line below: an update in progress is not the moment for a billing line.
-  void refresh_problem_() {
-    const std::string &text = !problem_text_.empty() ? problem_text_
-                              : notice_.empty()      ? doc_notice_
-                                                     : empty_;
-    lv_label_set_text(problem_, text.c_str());
-    set_hidden(problem_, text.empty());
+  static constexpr const char *WAITING = "Setting the clock.";
+
+  // One row at the foot of the face, and three things that want it. A firmware update is the
+  // loudest, then the document's notice, then a live problem; while any of them applies the
+  // diary dot and the temperature go and what is left is a grey line.
+  void refresh_foot_() {
+    const std::string &msg = !notice_.empty()       ? notice_
+                             : !doc_notice_.empty() ? doc_notice_
+                                                    : problem_text_;
+    if (!msg.empty()) {
+      lv_obj_set_pos(line_, 24, 419);
+      lv_obj_set_width(line_, 432);
+      lv_label_set_text(line_, msg.c_str());
+      set_tok(line_, T_CHALK70);
+      set_hidden(line_, false);
+      set_hidden(dot_, true);
+      set_hidden(temp_, true);
+      set_hidden(rule_, false);
+      return;
+    }
+    lv_obj_set_pos(line_, 45, 419);
+    lv_obj_set_width(line_, 339);
+    lv_label_set_text(line_, next_text_.c_str());
+    set_tok(line_, T_TIME2);
+    set_hidden(line_, next_text_.empty());
+    set_hidden(dot_, next_text_.empty());
+    lv_label_set_text(temp_, temp_text_.c_str());
+    set_hidden(temp_, temp_text_.empty());
+    set_hidden(rule_, next_text_.empty() && temp_text_.empty());
   }
 
-  lv_obj_t *time_ = nullptr, *waiting_ = nullptr, *date_ = nullptr, *problem_ = nullptr, *weather_ = nullptr;
-  std::string last_hm_, weather_text_, notice_, problem_text_, doc_notice_;
-  const std::string empty_;
+  lv_obj_t *time_ = nullptr, *date_ = nullptr, *rule_ = nullptr, *dot_ = nullptr;
+  lv_obj_t *line_ = nullptr, *temp_ = nullptr;
+  std::string last_hm_, next_text_, temp_text_, notice_, problem_text_, doc_notice_;
 };
 
 // ---- pairing: the only page besides the clock while the device is unclaimed. The QR encodes the
@@ -922,39 +985,47 @@ class BootView {
   uint32_t t0_ = 0, hold_until_ = 0, content_at_ = 0, last_now_ = 0;
 };
 
-// ---- board: the departures or arrivals template. The Phase 1a geometry, with the rows dropped
-// eight pixels so the 36 px margin the design gives a board leaves the strip its band. S5 lays
-// the face out properly.
+// ---- board: the departures or arrivals template, laid out as BoardFace in the design system.
+//
+// 36 px of padding, a header whose title and stamp share one baseline, then four rows. The
+// design's 22 px gap between rows would put the fourth one under the page dots, so the gap is 12
+// and only the header keeps its 22. That gives rows at 94 (raised, 76 tall), 182, 264 and 346
+// (70 tall each, ending at 416), the problem line at 424 and the dots at 459.
+//
+// The parser keeps five rows because the document may carry five; the fifth is not drawn, and
+// nothing can long-press a row that is not on screen.
 class BoardView : public PageView {
  public:
-  static const int ROWS = 5;
+  static const int ROWS_SHOWN = 4;
 
   BoardView(lv_obj_t *parent, const std::string &id) : PageView(parent, id, 'b') {
-    build_header_("Train board");
-    for (int i = 0; i < ROWS; i++) {
-      Row &r = rows_[i];
-      r.card = mk_card(root_, 14, 68 + 74 * i, 452, 68);
-      set_hidden(r.card, true);
-      // 84 px of mono 20 holds "08:44" and its tracking without wrapping to a second line.
-      r.time = mk_label(r.card, 14, 5, 84, 34, F(g_fonts.mono20), T_CHALK);
-      tracked(r.time, 1);
-      r.dest = mk_label(r.card, 104, 5, 254, 34, F(g_fonts.sans500_20), T_CHALK);
-      lv_label_set_long_mode(r.dest, LV_LABEL_LONG_MODE_DOTS);
-      r.plat = mk_label(r.card, 360, 5, 78, 34, F(g_fonts.sans500_20), T_CHALK70);
-      lv_obj_set_style_text_align(r.plat, LV_TEXT_ALIGN_RIGHT, 0);
-      r.exp = mk_label(r.card, 14, 41, 84, 22, F(g_fonts.mono15), T_CHALK70);
-      tracked(r.exp, 1);
-      r.status = mk_label(r.card, 104, 41, 334, 22, F(g_fonts.mono15), T_CHALK70);
-      tracked(r.status, 1);
-      lv_label_set_long_mode(r.status, LV_LABEL_LONG_MODE_DOTS);
-    }
+    // The header is two labels rather than a StatusStrip: the design sets the title in 30 px
+    // Figtree and sits the mono stamp on its baseline, which the strip's one band cannot do.
+    const lv_font_t *tf = F(g_fonts.sans600_30), *sf = F(g_fonts.mono15);
+    int stamp_y = HEAD_Y + (lv_font_get_line_height(tf) - tf->base_line) -
+                  (lv_font_get_line_height(sf) - sf->base_line);
+    title_ = mk_label(root_, PAD, HEAD_Y, 266, 40, tf, T_CHALK, "");
+    lv_label_set_long_mode(title_, LV_LABEL_LONG_MODE_DOTS);
+    stamp_lbl_ = mk_label(root_, 480 - PAD - 130, stamp_y, 130, 20, sf, T_CHALK50, "LOADING");
+    tracked(stamp_lbl_, 1);
+    lv_obj_set_style_text_align(stamp_lbl_, LV_TEXT_ALIGN_RIGHT, 0);
+
+    for (int i = 0; i < ROWS_SHOWN; i++) build_row_(rows_[i], i);
+    build_card_();
+
+    // A problem worth support seeing, just above the dots. Informational statuses never reach it.
+    problem_ = mk_label(root_, PAD, 424, ROW_W, 20, sf, T_CHALK50, "");
+    tracked(problem_, 1);
+    lv_label_set_long_mode(problem_, LV_LABEL_LONG_MODE_DOTS);
+    set_hidden(problem_, true);
+
     // A tap anywhere refreshes; the row hit rects sit on top and add the long press. Neither is
     // scrollable, so a horizontal drag still reaches the carousel.
     lv_obj_t *tap = mk_obj(root_, 0, 0, 480, 480);
     lv_obj_add_flag(tap, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(tap, touch_cb_, LV_EVENT_SHORT_CLICKED, nullptr);
-    for (int i = 0; i < ROWS; i++) {
-      lv_obj_t *hit = mk_obj(root_, 0, 68 + 74 * i, 480, 74);
+    for (int i = 0; i < ROWS_SHOWN; i++) {
+      lv_obj_t *hit = mk_obj(root_, 0, row_y(i), 480, row_h(i));
       lv_obj_add_flag(hit, LV_OBJ_FLAG_CLICKABLE);
       lv_obj_set_user_data(hit, (void *) (intptr_t) i);
       lv_obj_add_event_cb(hit, touch_cb_, LV_EVENT_SHORT_CLICKED, nullptr);
@@ -967,47 +1038,55 @@ class BoardView : public PageView {
     // The module decides the empty-state wording. A document from a backend that does not send
     // `module` is rail, which is all there was before 1.4.0.
     module_ = pg.module;
-    if (!pg.title.empty()) set_title_(pg.title);
+    // The header has room for a name, not a sentence, which is what `short` is for.
+    const std::string &head = pg.short_title.empty() ? pg.title : pg.short_title;
+    if (!head.empty()) lv_label_set_text(title_, head.c_str());
+    asof_ = pg.asof;
+    stale_ = pg.stale;
+    show_problem_("");   // a document is the answer to whatever the last problem was about
     uids_.clear();
-    for (int i = 0; i < ROWS; i++) {
+    int n = (int) pg.rows.size();
+    if (n > ROWS_SHOWN) n = ROWS_SHOWN;
+    for (int i = 0; i < ROWS_SHOWN; i++) {
       Row &r = rows_[i];
-      if (i < (int) pg.rows.size()) {
-        const BoardRow &d = pg.rows[i];
-        label_text(r.time, d.time);
-        label_text(r.dest, d.dest);
-        label_text(r.plat, d.plat);
-        // The status string arrives fully composed (delay, coaches, operator, and for an arrivals
-        // board the origin's booked and actual departure).
-        label_text(r.status, d.status);
-        set_tok(r.status, row_colour(d.colour));
-        label_text(r.exp, d.expected);
-        set_tok(r.exp, row_colour(d.colour));
-        set_hidden(r.card, false);
-        uids_.push_back(d.uid);
-      } else {
-        clear_row_(r);
+      if (i >= n) {
+        set_hidden(r.box, true);
+        continue;
       }
+      const BoardRow &d = pg.rows[i];
+      label_text(r.time, d.time);
+      label_text(r.dest, d.dest);
+      label_text(r.plat, d.plat);
+      // The status string arrives fully composed (delay, coaches, operator, and for an arrivals
+      // board the origin's booked and actual departure). `e` is the expected time on rail and
+      // the wait on TfL, and goes in front of it.
+      label_text(r.status, d.expected.empty() ? d.status : d.expected + " \xC2\xB7 " + d.status);
+      set_tok(r.status, row_colour(d.colour));
+      // A cancelled service is dimmed where it stands. It is never dropped or moved: the
+      // household needs to see that the train they were going to catch is not running.
+      lv_obj_set_style_opa(r.box, d.colour == "R" ? LV_OPA_60 : LV_OPA_COVER, 0);
+      set_hidden(r.box, false);
+      uids_.push_back(d.uid);
     }
-    if (pg.rows.empty()) {
-      // asof is 0 only when the backend could not build this board at all. Say so rather than
-      // claiming there is nothing due.
-      bool missing = pg.asof == 0;
-      // A bus stop shows buses; rail and tube boards both show trains. Only a rail board can
-      // promise a window, because only its backend adapter asks for one.
-      const char *none = module_ == "bus" ? "No buses" : "No trains";
-      bool rail = module_.empty() || module_ == "rail";
-      const char *waiting = rail ? (arrivals_ ? "None arriving in the next 2 hours"
-                                              : "None due in the next 2 hours")
-                                 : "Nothing expected at this stop";
-      lv_label_set_text(rows_[0].dest, missing ? "Board unavailable" : none);
-      lv_label_set_text(rows_[0].status, missing ? "Not in the last update from the backend" : waiting);
-      set_tok(rows_[0].status, T_CHALK70);
-      set_hidden(rows_[0].card, false);
-    }
-    set_stamp_(pg.asof, pg.stale);
+    set_hidden(card_, n > 0);
+    if (n == 0) fill_card_(pg);
+    refresh_stamp_();
   }
 
-  void tick(esphome::ESPTime now) override { tick_header_(now); }
+  // The stamp is rebuilt once a minute, because a board that stops being fetched crosses the
+  // five-minute line on its own and has to say so.
+  void tick(esphome::ESPTime now) override {
+    if (g_nowhm == last_hm_) return;
+    last_hm_ = g_nowhm;
+    refresh_stamp_();
+  }
+
+  // A board shows problems only. An informational status is dropped: the stamp already says how
+  // old the data is, which is all this face would gain from one.
+  void set_status(const std::string &msg, bool problem) override {
+    if (!problem) return;
+    show_problem_(msg);
+  }
 
   const std::string &uid_at(int i) const {
     static const std::string none;
@@ -1016,27 +1095,115 @@ class BoardView : public PageView {
   }
 
  private:
-  struct Row {
-    lv_obj_t *card = nullptr, *time = nullptr, *dest = nullptr, *plat = nullptr, *exp = nullptr, *status = nullptr;
-  };
-  static void clear_row_(Row &r) {
-    lv_label_set_text(r.time, "");
-    lv_label_set_text(r.dest, "");
-    lv_label_set_text(r.plat, "");
-    lv_label_set_text(r.status, "");
-    lv_label_set_text(r.exp, "");
-    set_hidden(r.card, true);
+  // The face's geometry, from DepartureRow: rows 408 wide inside a 36 px margin, the first one
+  // raised and a little taller for its heavier type.
+  static const int PAD = 36, HEAD_Y = 36, ROW_X = 36, ROW_W = 408;
+  static const int ROW0_Y = 94, ROW0_H = 76, ROW_H = 70, ROW_GAP = 12;
+
+  static int row_y(int i) {
+    return i == 0 ? ROW0_Y : ROW0_Y + ROW0_H + ROW_GAP + (ROW_H + ROW_GAP) * (i - 1);
   }
+  static int row_h(int i) { return i == 0 ? ROW0_H : ROW_H; }
+
+  struct Row {
+    lv_obj_t *box = nullptr, *time = nullptr, *dest = nullptr, *status = nullptr, *plat = nullptr;
+  };
+
+  // Columns inside a row, measured from the row's own left edge: 16 px of padding, a 62 px time,
+  // a 14 px gap, then the destination over its status, with the platform right-aligned at the
+  // far end. The platform sits on the destination's line rather than the row's middle, which
+  // leaves the status the full width: the composed status strings are long and the design's own
+  // are not.
+  void build_row_(Row &r, int i) {
+    int h = row_h(i), y = row_y(i);
+    bool first = i == 0;
+    int pad = first ? 14 : 12, dest_h = first ? 26 : 24;
+    r.box = first ? mk_panel(root_, ROW_X, y, ROW_W, h, T_RAISED, 16)
+                  : mk_obj(root_, ROW_X, y, ROW_W, h);
+    // The third and fourth rows carry a hairline along the top, as the design has them.
+    if (i >= 2) mk_rule(r.box, 0, 0, ROW_W, T_LINE);
+    // No tracking on the time, as the design has it: 62 px holds "08:47" at mono 20 and not a
+    // pixel more, which is what makes the column line up down the face.
+    r.time = mk_label(r.box, 16, (h - 26) / 2, 62, 26, F(g_fonts.mono20), first ? T_CHALK : T_TIME2);
+    r.dest = mk_label(r.box, 92, pad, 226, dest_h, F(first ? g_fonts.sans600_20 : g_fonts.sans500_18),
+                      first ? T_CHALK : T_TITLE2);
+    lv_label_set_long_mode(r.dest, LV_LABEL_LONG_MODE_DOTS);
+    r.status = mk_label(r.box, 92, pad + dest_h + 2, 300, 20, F(g_fonts.mono15), T_CHALK70);
+    tracked(r.status, 1);
+    lv_label_set_long_mode(r.status, LV_LABEL_LONG_MODE_DOTS);
+    r.plat = mk_label(r.box, 332, pad + (dest_h - 20) / 2, 60, 20, F(g_fonts.mono15),
+                      first ? T_CHALK70 : T_CHALK50);
+    tracked(r.plat, 1);
+    lv_obj_set_style_text_align(r.plat, LV_TEXT_ALIGN_RIGHT, 0);
+    set_hidden(r.box, true);
+  }
+
+  // The one card an empty or unreachable board shows, where the first row would be. Its height
+  // follows its sentence, which is why the footer is positioned after the text has been laid out.
+  void build_card_() {
+    card_ = mk_panel(root_, ROW_X, ROW0_Y, ROW_W, CARD_TEXT_Y + 24 + 24, T_DONEBG, 20);
+    set_hidden(card_, true);
+    card_label_ = mk_label(card_, 24, 24, ROW_W - 48, 20, F(g_fonts.mono15), T_CHALK50, "");
+    tracked(card_label_, 1);
+    card_text_ = mk_label(card_, 24, CARD_TEXT_Y, ROW_W - 48, 0, F(g_fonts.sans400_18), T_CHALK70, "");
+    lv_label_set_long_mode(card_text_, LV_LABEL_LONG_MODE_WRAP);
+    card_foot_ = mk_label(card_, 24, CARD_TEXT_Y + 36, ROW_W - 48, 20, F(g_fonts.mono15), T_CHALK50, "");
+    tracked(card_foot_, 1);
+  }
+
+  void fill_card_(const Page &pg) {
+    // asof is 0 only when the backend could not build this board at all. Say so rather than
+    // claiming there is nothing due.
+    bool missing = pg.asof == 0;
+    // A stop has no window to promise: only a rail board's adapter asks for one.
+    bool stop = module_ == "bus" || module_ == "tube";
+    const char *sentence = missing     ? "Can't reach the timetable."
+                           : stop      ? "Nothing due at this stop."
+                           : arrivals_ ? "Nothing arriving in the next two hours."
+                                       : "Nothing due in the next two hours.";
+    lv_label_set_text(card_label_, missing ? "OFFLINE" : "NOTHING DUE");
+    lv_label_set_text(card_text_, sentence);
+    std::string foot = missing ? std::string() : "SHOWING " + hhmm_of(pg.asof);
+    lv_label_set_text(card_foot_, foot.c_str());
+    set_hidden(card_foot_, foot.empty());
+    set_hidden(card_, false);
+    lv_obj_update_layout(card_);
+    int th = lv_obj_get_height(card_text_);
+    lv_obj_set_pos(card_foot_, 24, CARD_TEXT_Y + th + 12);
+    lv_obj_set_height(card_, CARD_TEXT_Y + th + (foot.empty() ? 0 : 32) + 24);
+  }
+
+  void refresh_stamp_() {
+    bool old = stale_now(asof_, stale_);
+    lv_label_set_text(stamp_lbl_, stamp_text(asof_, stale_).c_str());
+    if (old == stamp_stale_) return;
+    stamp_stale_ = old;
+    set_tok(stamp_lbl_, old ? T_CHALK70 : T_CHALK50);
+  }
+
+  void show_problem_(const std::string &msg) {
+    if (problem_text_ == msg) return;
+    problem_text_ = msg;
+    lv_label_set_text(problem_, msg.c_str());
+    set_hidden(problem_, msg.empty());
+  }
+
   static void touch_cb_(lv_event_t *e) { emit("TOUCH"); }
   static void long_cb_(lv_event_t *e) {
     lv_obj_t *o = lv_event_get_target_obj(e);
     emit("LONG|" + std::to_string((int) (intptr_t) lv_obj_get_user_data(o)));
   }
 
-  Row rows_[ROWS];
+  // 24 of padding, the 20 px label and the design's 12 px gap.
+  static const int CARD_TEXT_Y = 56;
+
+  Row rows_[ROWS_SHOWN];
+  lv_obj_t *title_ = nullptr, *stamp_lbl_ = nullptr, *problem_ = nullptr;
+  lv_obj_t *card_ = nullptr, *card_label_ = nullptr, *card_text_ = nullptr, *card_foot_ = nullptr;
   std::vector<std::string> uids_;
-  std::string module_;
-  bool arrivals_ = false;
+  std::string module_, problem_text_, last_hm_;
+  uint32_t asof_ = 0;
+  bool stale_ = false, stamp_stale_ = false, arrivals_ = false;
 };
 
 // ---- agenda: the 1a render_calendar algorithm, with cards created on demand instead of a pool of
@@ -1283,6 +1450,10 @@ class PageHost {
     cur_ = 0;
     unpaired_ = false;
     ssid_.clear();
+    events_.clear();
+    temp_.clear();
+    line_day_.clear();
+    line_hm_.clear();
   }
 
   // Reconcile the pages on screen with the document: reuse by id and type, create what is new,
@@ -1314,7 +1485,10 @@ class PageHost {
     // The document's notice goes on after the problem line has been cleared, so the arrival of a
     // document no longer wipes it: only a document without one does.
     clock->set_doc_notice(doc.notice);
-    clock_weather_(doc);
+    read_clock_sources_(doc);
+    line_day_ = g_today;
+    line_hm_ = g_nowhm;
+    refresh_clock_line_();
     layout_();
     size_t idx = cur_ < views_.size() ? cur_ : views_.size() - 1;
     if (!keep.empty()) {
@@ -1340,8 +1514,11 @@ class PageHost {
       }
     views_.clear();
     if (!pair) pair.reset(new PairingView(host_));
-    static_cast<ClockView *>(clock.get())->set_weather("");
-    // The notice belonged to a household that no longer claims this device.
+    // The diary and the weather belonged to a household that no longer claims this device, and
+    // so did the notice.
+    events_.clear();
+    temp_.clear();
+    static_cast<ClockView *>(clock.get())->set_line("", "");
     static_cast<ClockView *>(clock.get())->set_doc_notice("");
     static_cast<PairingView *>(pair.get())->set_code(code);
     views_.push_back(std::move(clock));
@@ -1412,6 +1589,13 @@ class PageHost {
       g_today = now.strftime("%Y%m%d");
       g_now_epoch = (uint32_t) now.timestamp;
       if (boot_) boot_->on_time_valid();
+      // The foot of the clock is about what is next, so it is rebuilt whenever the minute the
+      // events are measured against moves, and not only when a document lands.
+      if (g_today != line_day_ || g_nowhm != line_hm_) {
+        line_day_ = g_today;
+        line_hm_ = g_nowhm;
+        refresh_clock_line_();
+      }
     }
     for (auto &v : views_) v->tick(now);
   }
@@ -1461,7 +1645,7 @@ class PageHost {
   }
 
  private:
-  static constexpr size_t MAX_CONTENT = 8;
+  static constexpr size_t MAX_CONTENT = 8, MAX_CLOCK_EVENTS = 24;
 
   std::unique_ptr<PageView> make_view_(const Page &pg) {
     if (pg.type == 'b') return std::unique_ptr<PageView>(new BoardView(host_, pg.id));
@@ -1491,25 +1675,104 @@ class PageHost {
     if (boot_) boot_->raise();
   }
 
-  // The clock page carries the first row of the weather page when the document has one.
-  void clock_weather_(const Document &doc) {
+  // ---- the clock's foot line
+  // The next thing in the diary and the temperature come off two pages the clock itself never
+  // sees, so they are worked out here. What a document contributes is kept, in the smallest
+  // shape that will do, because the line also has to be rebuilt as the day moves on.
+  struct ClockEvent {
+    std::string d, t, s;
+    bool all_day = false;
+  };
+
+  void read_clock_sources_(const Document &doc) {
+    events_.clear();
+    temp_.clear();
     const Page *weather = nullptr;
+    bool named = false;
     for (const Page &pg : doc.pages) {
-      if (pg.type != 'g' || pg.grows.empty()) continue;
-      if (pg.module == "weather") {
-        weather = &pg;
-        break;
+      // Only today and tomorrow are ever read and the backend sorts by day, so the first two
+      // dozen events of the first agenda page are always enough to find them.
+      if (pg.type == 'a' && events_.empty()) {
+        for (const AgendaEvent &e : pg.events) {
+          if (events_.size() >= MAX_CLOCK_EVENTS) break;
+          ClockEvent c;
+          c.d = e.d;
+          c.t = e.t;
+          c.s = e.s;
+          c.all_day = e.all_day;
+          events_.push_back(std::move(c));
+        }
+        continue;
       }
-      if (weather == nullptr) weather = &pg;
+      if (pg.type != 'g') continue;
+      if (!named && pg.module == "weather") {
+        weather = &pg;
+        named = true;
+      } else if (weather == nullptr) {
+        weather = &pg;
+      }
     }
-    std::string line;
-    if (weather != nullptr) {
-      const GenericRow &r = weather->grows[0];
-      line = r.value;
-      if (!r.a.empty()) line += (line.empty() ? "" : "  ") + r.a;
-      if (!r.b.empty()) line += (line.empty() ? "" : "  ") + r.b;
+    if (weather == nullptr) return;
+    if (!weather->temp.empty()) {
+      temp_ = weather->temp + "\xC2\xB0";   // U+00B0
+      return;
     }
-    static_cast<ClockView *>(views_[0].get())->set_weather(line);
+    // A backend older than the weather face sends no `temp`, so the first row's big value stands
+    // in for it, but only when it really is a number: `v` may be a day count or anything else.
+    if (weather->grows.empty()) return;
+    const std::string &v = weather->grows[0].value;
+    size_t i = (!v.empty() && v[0] == '-') ? 1 : 0;
+    if (i >= v.size()) return;
+    for (; i < v.size(); i++)
+      if (v[i] < '0' || v[i] > '9') return;
+    temp_ = v + "\xC2\xB0";
+  }
+
+  // "YYYYMMDD" a day later. Midday, so no daylight-saving shift can move the date.
+  static std::string day_after(const std::string &ymd) {
+    if (ymd.size() != 8) return "";
+    int n[8];
+    for (int i = 0; i < 8; i++) {
+      if (ymd[i] < '0' || ymd[i] > '9') return "";
+      n[i] = ymd[i] - '0';
+    }
+    struct tm t = {};
+    t.tm_year = n[0] * 1000 + n[1] * 100 + n[2] * 10 + n[3] - 1900;
+    t.tm_mon = n[4] * 10 + n[5] - 1;
+    t.tm_mday = n[6] * 10 + n[7] + 1;
+    t.tm_hour = 12;
+    t.tm_isdst = -1;
+    if (mktime(&t) == (time_t) -1) return "";
+    char buf[12];
+    strftime(buf, sizeof buf, "%Y%m%d", &t);
+    return buf;
+  }
+
+  // Today's next timed event, else today's first all-day one, else tomorrow's first. Empty when
+  // the document carried no agenda page, or the clock has not been set yet.
+  std::string next_event_() const {
+    if (events_.empty() || g_today.empty()) return "";
+    const ClockEvent *all_day = nullptr;
+    for (const auto &e : events_) {
+      if (e.d != g_today) continue;
+      if (e.all_day) {
+        if (all_day == nullptr) all_day = &e;
+        continue;
+      }
+      // Sorted by day and time, so the first one still to come is the next one.
+      if (e.t.size() == 5 && e.t > g_nowhm) return e.t + " " + e.s;
+    }
+    if (all_day != nullptr) return "All day \xC2\xB7 " + all_day->s;
+    std::string tomorrow = day_after(g_today);
+    if (tomorrow.empty()) return "";
+    for (const auto &e : events_)
+      if (e.d == tomorrow) return "Tomorrow \xC2\xB7 " + (e.all_day ? e.s : e.t + " " + e.s);
+    return "";
+  }
+
+  void refresh_clock_line_() {
+    if (views_.empty()) return;
+    static_cast<ClockView *>(views_[0].get())->set_line(next_event_(), temp_);
   }
 
 #if HB_CAROUSEL
@@ -1544,6 +1807,9 @@ class PageHost {
   // The boot overlay is never a page: it is owned here and destroyed once, on its own.
   std::unique_ptr<BootView> boot_;
   std::string ssid_;
+  // What the clock's foot line is built from, and the minute it was last built for.
+  std::vector<ClockEvent> events_;
+  std::string temp_, line_day_, line_hm_;
   size_t cur_ = 0;
   bool unpaired_ = false;
 };

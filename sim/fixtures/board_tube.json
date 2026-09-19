@@ -13,7 +13,8 @@
        {"t": "08:45", "d": "Brixton", "p": "", "s": "Victoria line . minor delays", "c": "Y", "e": "4 min", "id": "tfl:1003"},
        {"t": "08:47", "d": "Walthamstow Central", "p": "", "s": "Victoria line to Walthamstow Central", "c": "G", "e": "6 min", "id": "tfl:1004"},
        {"t": "08:50", "d": "Brixton", "p": "", "s": "Victoria line to Brixton", "c": "G", "e": "9 min", "id": "tfl:1005"}
-     ]}
+     ],
+     "short": "Victoria"}
   ],
   "settings": {"brightness": 90, "tier": "commuter", "name": "Hallway"}
 }
