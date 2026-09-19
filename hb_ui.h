@@ -210,6 +210,10 @@ inline lv_obj_t *mk_label(lv_obj_t *parent, int x, int y, int w, int h, const lv
   lv_obj_set_style_bg_opa(l, LV_OPA_TRANSP, 0);
   lv_obj_set_style_text_font(l, font, 0);
   lv_obj_add_style(l, &g_text[tok], 0);
+  // A label with a width is one line unless a caller says otherwise: LVGL's default is to wrap,
+  // and a time that measures a pixel wider on the board than on the host would otherwise fold
+  // its minutes under the row. Sentences that may run to two lines set WRAP themselves.
+  if (w > 0) lv_label_set_long_mode(l, LV_LABEL_LONG_MODE_CLIP);
   lv_label_set_text(l, text);
   return l;
 }
@@ -1519,7 +1523,7 @@ class AgendaView : public PageView {
   // The face's geometry, from DayFace and AgendaRow: rows 432 wide inside a 24 px margin, 16 of
   // padding in the raised one and 12/16 in the rest, a 52 px time gutter and a 14 px gap after it.
   static const int LIST_Y = 68, LIST_BOTTOM = 464, ROW_W = 432, ROW_H = 60, RAISED_H = 80;
-  static const int GAP = 8, HEAD_H = 38, HEAD_GAP = 8, PAD = 16, TIME_W = 52, TEXT_X = 82;
+  static const int GAP = 8, HEAD_H = 38, HEAD_GAP = 8, PAD = 16, TIME_W = 56, TEXT_X = 86;
   static const int DUR_W = 84;
 
   struct Card {
