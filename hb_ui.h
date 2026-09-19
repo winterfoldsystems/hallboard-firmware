@@ -382,12 +382,12 @@ class StatusStrip {
     dot_ = mk_panel(root_, 0, 10, 9, 9, T_LIFT, LV_RADIUS_CIRCLE);
     set_hidden(dot_, true);
     // The right label holds a time and takes the last 80 px, so the left one stops ten pixels
-    // short of it: room for a board title of twenty-eight characters at mono 20, and the dots
-    // for the rest of a longer one.
-    left_ = mk_label(root_, 0, 1, w - 90, 26, F(g_fonts.mono20), T_CHALK70, "");
+    // short of it. Both are Figtree at 20, the title in the heavier weight: a board title of
+    // about thirty capitals fits, and the dots stand for the rest of a longer one.
+    left_ = mk_label(root_, 0, 1, w - 90, 26, F(g_fonts.sans600_20), T_CHALK70, "");
     tracked(left_, 1);
     lv_label_set_long_mode(left_, LV_LABEL_LONG_MODE_DOTS);
-    right_ = mk_label(root_, w - 80, 1, 80, 26, F(g_fonts.mono20), T_CHALK70, "");
+    right_ = mk_label(root_, w - 80, 1, 80, 26, F(g_fonts.sans500_20), T_CHALK70, "");
     tracked(right_, 1);
     lv_obj_set_style_text_align(right_, LV_TEXT_ALIGN_RIGHT, 0);
   }
