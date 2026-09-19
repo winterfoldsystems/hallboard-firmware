@@ -22,8 +22,8 @@ lvgl:
         # Anchors. Referencing an esphome `font:` here is what defines USE_LVGL_FONT and so gives
         # Font::get_lv_font(); the qrcode widget is what turns on LV_USE_QRCODE. hb_ui.h then
         # uses id(...)->get_lv_font() and lv_qrcode_create directly. One label per font id, all
-        # hidden, none ever drawn. The built-in Montserrat bitmaps need no anchor here: the
-        # static pages below still reference them by name.
+        # hidden, none ever drawn. Nothing in this file draws with a built-in font any more, so
+        # every font a page can use is anchored here.
         - label: {id: anchor_fig600_132, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig600_132, hidden: true}
         - label: {id: anchor_fig600_88, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig600_88, hidden: true}
         - label: {id: anchor_fig600_30, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig600_30, hidden: true}
@@ -41,43 +41,42 @@ lvgl:
         - label: {id: anchor_mono400_14, x: 0, y: 0, width: 1, height: 1, text: "", text_font: mono400_14, hidden: true}
         - label: {id: anchor_icon, x: 0, y: 0, width: 1, height: 1, text: "", text_font: icon_font, hidden: true}
         - qrcode: {id: anchor_qr, x: 0, y: 0, size: 20, text: "", hidden: true}
+    # Page 1: the one detail sheet, the calling points for a single service. The header and the
+    # body are set from hallboard.yaml; a tap anywhere closes it.
     - id: detail_page
-      bg_color: 0x000000
+      bg_color: 0x0F0E15
       bg_opa: COVER
+      scrollable: false
+      pad_all: 0
       widgets:
         - label:
             id: detail_hdr
-            x: 14
-            y: 12
-            width: 452
+            x: 24
+            y: 24
+            width: 432
+            height: 28
             text: ""
-            text_font: montserrat_22
-            text_color: 0xFFFFFF
-        - line:
-            points: [[14, 72], [466, 72]]
-            line_color: 0x444444
-            line_width: 2
+            text_font: fig600_20
+            text_color: 0xF5F4F9
+            long_mode: DOT
         - label:
             id: detail_body
-            x: 14
-            y: 84
-            width: 452
-            height: 346
+            x: 24
+            y: 68
+            width: 432
+            height: 348
             text: ""
-            text_font: montserrat_20
-            text_color: 0xFFB000
-        - line:
-            points: [[14, 436], [466, 436]]
-            line_color: 0x444444
-            line_width: 2
+            text_font: mono400_16
+            text_color: 0xABAAB2
         - label:
             id: detail_foot
-            x: 14
-            y: 446
-            width: 452
-            text: "Tap to go back"
-            text_font: montserrat_16
-            text_color: 0x888888
+            x: 24
+            y: 436
+            width: 432
+            height: 20
+            text: "Tap to close."
+            text_font: mono400_15
+            text_color: 0x807F87
         - obj:
             id: detail_tap
             x: 0
@@ -93,362 +92,499 @@ lvgl:
             on_short_click:
               - script.execute: {id: ev, msg: "TOUCH"}
 
+    # Page 2: pick a network. Seven rows of 60 with 12 between them is 492 px and there are 278 to
+    # draw them in, so the list scrolls; the bottom row and the status line stay put.
     - id: wifi_page
-      bg_color: 0x000000
+      bg_color: 0x0F0E15
       bg_opa: COVER
       scrollable: false
       pad_all: 0
       widgets:
         - label:
             id: wifi_title
-            x: 14
-            y: 12
-            width: 250
-            height: 26
-            text: "Wi-Fi networks"
-            text_font: montserrat_22
-            text_color: 0xFFFFFF
+            x: 24
+            y: 24
+            width: 432
+            height: 28
+            text: "Choose your Wi-Fi"
+            text_font: fig600_20
+            text_color: 0xF5F4F9
+        - label:
+            id: wifi_status
+            x: 24
+            y: 58
+            width: 432
+            height: 20
+            text: ""
+            text_font: mono400_15
+            text_color: 0x807F87
+            long_mode: DOT
+        # pad_all 6 is what a pressed row's 5 px ring draws into: a child is clipped to its
+        # parent's content area, so without the padding the ring would be cut off at the edges.
+        - obj:
+            id: net_list
+            x: 18
+            y: 90
+            width: 444
+            height: 290
+            bg_opa: TRANSP
+            border_width: 0
+            radius: 0
+            pad_all: 6
+            scrollable: true
+            scroll_dir: VER
+            scrollbar_mode: AUTO
+            scrollbar:
+              bg_color: 0x2E2D35
+              bg_opa: COVER
+              radius: CIRCLE
+              width: 4
+            layout:
+              type: flex
+              flex_flow: COLUMN
+              pad_row: 12
+            widgets:
+              - button:
+                  id: net0
+                  width: 100%
+                  height: 60
+                  bg_color: 0x292731
+                  bg_opa: COVER
+                  border_width: 0
+                  radius: CIRCLE
+                  pad_all: 0
+                  hidden: true
+                  pressed:
+                    transform_scale: 0.97
+                    outline_width: 5
+                    outline_pad: 0
+                    outline_color: 0x292731
+                    outline_opa: 60%
+                  on_click:
+                    - script.execute: {id: ev, msg: "NET|0"}
+                  widgets:
+                    - label:
+                        id: net0_lbl
+                        align: LEFT_MID
+                        x: 24
+                        width: 320
+                        height: 24
+                        text: ""
+                        text_font: fig500_18
+                        text_color: 0xF5F4F9
+                        long_mode: DOT
+                    - label:
+                        id: net0_sig
+                        align: RIGHT_MID
+                        x: -24
+                        text: ""
+                        text_font: mono400_15
+                        text_color: 0x807F87
+              - button:
+                  id: net1
+                  width: 100%
+                  height: 60
+                  bg_color: 0x292731
+                  bg_opa: COVER
+                  border_width: 0
+                  radius: CIRCLE
+                  pad_all: 0
+                  hidden: true
+                  pressed:
+                    transform_scale: 0.97
+                    outline_width: 5
+                    outline_pad: 0
+                    outline_color: 0x292731
+                    outline_opa: 60%
+                  on_click:
+                    - script.execute: {id: ev, msg: "NET|1"}
+                  widgets:
+                    - label:
+                        id: net1_lbl
+                        align: LEFT_MID
+                        x: 24
+                        width: 320
+                        height: 24
+                        text: ""
+                        text_font: fig500_18
+                        text_color: 0xF5F4F9
+                        long_mode: DOT
+                    - label:
+                        id: net1_sig
+                        align: RIGHT_MID
+                        x: -24
+                        text: ""
+                        text_font: mono400_15
+                        text_color: 0x807F87
+              - button:
+                  id: net2
+                  width: 100%
+                  height: 60
+                  bg_color: 0x292731
+                  bg_opa: COVER
+                  border_width: 0
+                  radius: CIRCLE
+                  pad_all: 0
+                  hidden: true
+                  pressed:
+                    transform_scale: 0.97
+                    outline_width: 5
+                    outline_pad: 0
+                    outline_color: 0x292731
+                    outline_opa: 60%
+                  on_click:
+                    - script.execute: {id: ev, msg: "NET|2"}
+                  widgets:
+                    - label:
+                        id: net2_lbl
+                        align: LEFT_MID
+                        x: 24
+                        width: 320
+                        height: 24
+                        text: ""
+                        text_font: fig500_18
+                        text_color: 0xF5F4F9
+                        long_mode: DOT
+                    - label:
+                        id: net2_sig
+                        align: RIGHT_MID
+                        x: -24
+                        text: ""
+                        text_font: mono400_15
+                        text_color: 0x807F87
+              - button:
+                  id: net3
+                  width: 100%
+                  height: 60
+                  bg_color: 0x292731
+                  bg_opa: COVER
+                  border_width: 0
+                  radius: CIRCLE
+                  pad_all: 0
+                  hidden: true
+                  pressed:
+                    transform_scale: 0.97
+                    outline_width: 5
+                    outline_pad: 0
+                    outline_color: 0x292731
+                    outline_opa: 60%
+                  on_click:
+                    - script.execute: {id: ev, msg: "NET|3"}
+                  widgets:
+                    - label:
+                        id: net3_lbl
+                        align: LEFT_MID
+                        x: 24
+                        width: 320
+                        height: 24
+                        text: ""
+                        text_font: fig500_18
+                        text_color: 0xF5F4F9
+                        long_mode: DOT
+                    - label:
+                        id: net3_sig
+                        align: RIGHT_MID
+                        x: -24
+                        text: ""
+                        text_font: mono400_15
+                        text_color: 0x807F87
+              - button:
+                  id: net4
+                  width: 100%
+                  height: 60
+                  bg_color: 0x292731
+                  bg_opa: COVER
+                  border_width: 0
+                  radius: CIRCLE
+                  pad_all: 0
+                  hidden: true
+                  pressed:
+                    transform_scale: 0.97
+                    outline_width: 5
+                    outline_pad: 0
+                    outline_color: 0x292731
+                    outline_opa: 60%
+                  on_click:
+                    - script.execute: {id: ev, msg: "NET|4"}
+                  widgets:
+                    - label:
+                        id: net4_lbl
+                        align: LEFT_MID
+                        x: 24
+                        width: 320
+                        height: 24
+                        text: ""
+                        text_font: fig500_18
+                        text_color: 0xF5F4F9
+                        long_mode: DOT
+                    - label:
+                        id: net4_sig
+                        align: RIGHT_MID
+                        x: -24
+                        text: ""
+                        text_font: mono400_15
+                        text_color: 0x807F87
+              - button:
+                  id: net5
+                  width: 100%
+                  height: 60
+                  bg_color: 0x292731
+                  bg_opa: COVER
+                  border_width: 0
+                  radius: CIRCLE
+                  pad_all: 0
+                  hidden: true
+                  pressed:
+                    transform_scale: 0.97
+                    outline_width: 5
+                    outline_pad: 0
+                    outline_color: 0x292731
+                    outline_opa: 60%
+                  on_click:
+                    - script.execute: {id: ev, msg: "NET|5"}
+                  widgets:
+                    - label:
+                        id: net5_lbl
+                        align: LEFT_MID
+                        x: 24
+                        width: 320
+                        height: 24
+                        text: ""
+                        text_font: fig500_18
+                        text_color: 0xF5F4F9
+                        long_mode: DOT
+                    - label:
+                        id: net5_sig
+                        align: RIGHT_MID
+                        x: -24
+                        text: ""
+                        text_font: mono400_15
+                        text_color: 0x807F87
+              - button:
+                  id: net6
+                  width: 100%
+                  height: 60
+                  bg_color: 0x292731
+                  bg_opa: COVER
+                  border_width: 0
+                  radius: CIRCLE
+                  pad_all: 0
+                  hidden: true
+                  pressed:
+                    transform_scale: 0.97
+                    outline_width: 5
+                    outline_pad: 0
+                    outline_color: 0x292731
+                    outline_opa: 60%
+                  on_click:
+                    - script.execute: {id: ev, msg: "NET|6"}
+                  widgets:
+                    - label:
+                        id: net6_lbl
+                        align: LEFT_MID
+                        x: 24
+                        width: 320
+                        height: 24
+                        text: ""
+                        text_font: fig500_18
+                        text_color: 0xF5F4F9
+                        long_mode: DOT
+                    - label:
+                        id: net6_sig
+                        align: RIGHT_MID
+                        x: -24
+                        text: ""
+                        text_font: mono400_15
+                        text_color: 0x807F87
         - button:
             id: wifi_scan_btn
-            x: 276
-            y: 6
-            width: 96
-            height: 36
-            bg_color: 0x1E2A44
-            radius: 4
+            x: 24
+            y: 396
+            width: 210
+            height: 60
+            bg_color: 0x7A5AF8
+            bg_opa: COVER
+            border_width: 0
+            radius: CIRCLE
             pad_all: 0
+            pressed:
+              transform_scale: 0.97
+              outline_width: 5
+              outline_pad: 0
+              outline_color: 0x7A5AF8
+              outline_opa: 28%
             on_click:
               - script.execute: {id: ev, msg: "WIFISCAN"}
             widgets:
               - label:
                   id: wifi_scan_btn_lbl
                   align: CENTER
-                  x: 0
-                  text: "Scan"
-                  text_font: montserrat_18
+                  text: "Scan again"
+                  text_font: fig500_18
                   text_color: 0xFFFFFF
         - button:
             id: wifi_cancel_btn
-            x: 380
-            y: 6
-            width: 86
-            height: 36
-            bg_color: 0x442020
-            radius: 4
+            x: 246
+            y: 396
+            width: 210
+            height: 60
+            bg_opa: TRANSP
+            border_width: 2
+            border_color: 0x42414C
+            border_opa: COVER
+            radius: CIRCLE
             pad_all: 0
+            pressed:
+              transform_scale: 0.97
+              outline_width: 5
+              outline_pad: 0
+              outline_color: 0x292731
+              outline_opa: 60%
             on_click:
               - script.execute: {id: ev, msg: "CANCEL"}
             widgets:
               - label:
                   id: wifi_cancel_btn_lbl
                   align: CENTER
-                  x: 0
-                  text: "Close"
-                  text_font: montserrat_18
-                  text_color: 0xFFFFFF
-        - button:
-            id: net0
-            x: 14
-            y: 56
-            width: 452
-            height: 40
-            bg_color: 0x1E2A44
-            radius: 4
-            pad_all: 0
-            hidden: true
-            on_click:
-              - script.execute: {id: ev, msg: "NET|0"}
-            widgets:
-              - label:
-                  id: net0_lbl
-                  align: LEFT_MID
-                  x: 12
-                  width: 380
-                  height: 24
-                  text: ""
-                  text_font: montserrat_20
-                  text_color: 0xFFFFFF
-                  long_mode: DOT
-              - label:
-                  id: net0_sig
-                  align: RIGHT_MID
-                  x: -12
-                  text: ""
-                  text_font: montserrat_18
-                  text_color: 0x3DDC84
-        - button:
-            id: net1
-            x: 14
-            y: 102
-            width: 452
-            height: 40
-            bg_color: 0x1E2A44
-            radius: 4
-            pad_all: 0
-            hidden: true
-            on_click:
-              - script.execute: {id: ev, msg: "NET|1"}
-            widgets:
-              - label:
-                  id: net1_lbl
-                  align: LEFT_MID
-                  x: 12
-                  width: 380
-                  height: 24
-                  text: ""
-                  text_font: montserrat_20
-                  text_color: 0xFFFFFF
-                  long_mode: DOT
-              - label:
-                  id: net1_sig
-                  align: RIGHT_MID
-                  x: -12
-                  text: ""
-                  text_font: montserrat_18
-                  text_color: 0x3DDC84
-        - button:
-            id: net2
-            x: 14
-            y: 148
-            width: 452
-            height: 40
-            bg_color: 0x1E2A44
-            radius: 4
-            pad_all: 0
-            hidden: true
-            on_click:
-              - script.execute: {id: ev, msg: "NET|2"}
-            widgets:
-              - label:
-                  id: net2_lbl
-                  align: LEFT_MID
-                  x: 12
-                  width: 380
-                  height: 24
-                  text: ""
-                  text_font: montserrat_20
-                  text_color: 0xFFFFFF
-                  long_mode: DOT
-              - label:
-                  id: net2_sig
-                  align: RIGHT_MID
-                  x: -12
-                  text: ""
-                  text_font: montserrat_18
-                  text_color: 0x3DDC84
-        - button:
-            id: net3
-            x: 14
-            y: 194
-            width: 452
-            height: 40
-            bg_color: 0x1E2A44
-            radius: 4
-            pad_all: 0
-            hidden: true
-            on_click:
-              - script.execute: {id: ev, msg: "NET|3"}
-            widgets:
-              - label:
-                  id: net3_lbl
-                  align: LEFT_MID
-                  x: 12
-                  width: 380
-                  height: 24
-                  text: ""
-                  text_font: montserrat_20
-                  text_color: 0xFFFFFF
-                  long_mode: DOT
-              - label:
-                  id: net3_sig
-                  align: RIGHT_MID
-                  x: -12
-                  text: ""
-                  text_font: montserrat_18
-                  text_color: 0x3DDC84
-        - button:
-            id: net4
-            x: 14
-            y: 240
-            width: 452
-            height: 40
-            bg_color: 0x1E2A44
-            radius: 4
-            pad_all: 0
-            hidden: true
-            on_click:
-              - script.execute: {id: ev, msg: "NET|4"}
-            widgets:
-              - label:
-                  id: net4_lbl
-                  align: LEFT_MID
-                  x: 12
-                  width: 380
-                  height: 24
-                  text: ""
-                  text_font: montserrat_20
-                  text_color: 0xFFFFFF
-                  long_mode: DOT
-              - label:
-                  id: net4_sig
-                  align: RIGHT_MID
-                  x: -12
-                  text: ""
-                  text_font: montserrat_18
-                  text_color: 0x3DDC84
-        - button:
-            id: net5
-            x: 14
-            y: 286
-            width: 452
-            height: 40
-            bg_color: 0x1E2A44
-            radius: 4
-            pad_all: 0
-            hidden: true
-            on_click:
-              - script.execute: {id: ev, msg: "NET|5"}
-            widgets:
-              - label:
-                  id: net5_lbl
-                  align: LEFT_MID
-                  x: 12
-                  width: 380
-                  height: 24
-                  text: ""
-                  text_font: montserrat_20
-                  text_color: 0xFFFFFF
-                  long_mode: DOT
-              - label:
-                  id: net5_sig
-                  align: RIGHT_MID
-                  x: -12
-                  text: ""
-                  text_font: montserrat_18
-                  text_color: 0x3DDC84
-        - button:
-            id: net6
-            x: 14
-            y: 332
-            width: 452
-            height: 40
-            bg_color: 0x1E2A44
-            radius: 4
-            pad_all: 0
-            hidden: true
-            on_click:
-              - script.execute: {id: ev, msg: "NET|6"}
-            widgets:
-              - label:
-                  id: net6_lbl
-                  align: LEFT_MID
-                  x: 12
-                  width: 380
-                  height: 24
-                  text: ""
-                  text_font: montserrat_20
-                  text_color: 0xFFFFFF
-                  long_mode: DOT
-              - label:
-                  id: net6_sig
-                  align: RIGHT_MID
-                  x: -12
-                  text: ""
-                  text_font: montserrat_18
-                  text_color: 0x3DDC84
-        - label:
-            id: wifi_status
-            x: 14
-            y: 446
-            width: 452
-            height: 22
-            text: ""
-            text_font: montserrat_16
-            text_color: 0x888888
-            long_mode: DOT
+                  text: "Not now"
+                  text_font: fig500_18
+                  text_color: 0xD1D0D7
 
+    # Page 3: the password for the network picked on page 2. The title is set from hallboard.yaml.
     - id: wifi_pw_page
-      bg_color: 0x000000
+      bg_color: 0x0F0E15
       bg_opa: COVER
       scrollable: false
       pad_all: 0
       widgets:
         - label:
             id: wifi_pw_title
-            x: 14
-            y: 10
-            width: 250
-            height: 26
+            x: 24
+            y: 24
+            width: 432
+            height: 28
             text: "Password"
-            text_font: montserrat_20
-            text_color: 0xFFFFFF
+            text_font: fig600_20
+            text_color: 0xF5F4F9
             long_mode: DOT
+        - textarea:
+            id: pw_ta
+            x: 24
+            y: 62
+            width: 432
+            height: 60
+            one_line: true
+            max_length: 63
+            # The board hangs in a hallway: the password shows as dots, with each character
+            # visible for a moment as it is typed, so a passer-by cannot read it off the wall.
+            password_mode: true
+            placeholder_text: "Password"
+            bg_color: 0x1B1922
+            bg_opa: COVER
+            border_color: 0x383641
+            border_width: 2
+            border_opa: COVER
+            radius: 16
+            pad_left: 18
+            pad_right: 18
+            pad_top: 17
+            pad_bottom: 17
+            text_font: fig400_18
+            text_color: 0xF5F4F9
+            textarea_placeholder:
+              text_color: 0x807F87
+              text_font: fig400_18
+            cursor:
+              border_color: 0x7A5AF8
+        - label:
+            id: wifi_pw_help
+            x: 24
+            y: 134
+            width: 432
+            height: 22
+            text: "Leave it empty if the network has none."
+            text_font: fig500_16
+            text_color: 0xABAAB2
         - button:
             id: wifi_connect_btn
-            x: 276
-            y: 6
-            width: 96
-            height: 32
-            bg_color: 0x1F5F3F
-            radius: 4
+            x: 24
+            y: 168
+            width: 210
+            height: 60
+            bg_color: 0x7A5AF8
+            bg_opa: COVER
+            border_width: 0
+            radius: CIRCLE
             pad_all: 0
+            pressed:
+              transform_scale: 0.97
+              outline_width: 5
+              outline_pad: 0
+              outline_color: 0x7A5AF8
+              outline_opa: 28%
             on_click:
               - script.execute: {id: ev, msg: "WIFICONNECT"}
             widgets:
               - label:
                   id: wifi_connect_btn_lbl
                   align: CENTER
-                  x: 0
                   text: "Connect"
-                  text_font: montserrat_18
+                  text_font: fig500_18
                   text_color: 0xFFFFFF
         - button:
             id: wifi_pw_cancel_btn
-            x: 380
-            y: 6
-            width: 86
-            height: 32
-            bg_color: 0x442020
-            radius: 4
+            x: 246
+            y: 168
+            width: 210
+            height: 60
+            bg_opa: TRANSP
+            border_width: 2
+            border_color: 0x42414C
+            border_opa: COVER
+            radius: CIRCLE
             pad_all: 0
+            pressed:
+              transform_scale: 0.97
+              outline_width: 5
+              outline_pad: 0
+              outline_color: 0x292731
+              outline_opa: 60%
             on_click:
               - script.execute: {id: ev, msg: "CANCEL"}
             widgets:
               - label:
                   id: wifi_pw_cancel_btn_lbl
                   align: CENTER
-                  x: 0
-                  text: "Cancel"
-                  text_font: montserrat_18
-                  text_color: 0xFFFFFF
-        - textarea:
-            id: pw_ta
-            x: 14
-            y: 44
-            width: 452
-            height: 38
-            one_line: true
-            max_length: 63
-            placeholder_text: "Wi-Fi password (leave empty for open network)"
-            text_font: montserrat_20
-        - label:
-            x: 14
-            y: 92
-            width: 452
-            height: 120
-            text: "Type the password, then tap Connect.\nThe keyboard's ABC / abc / 1# keys switch case and symbols."
-            text_font: montserrat_16
-            text_color: 0x888888
+                  text: "Not now"
+                  text_font: fig500_18
+                  text_color: 0xD1D0D7
+        # The key gap (pad_row / pad_column on the main part) is not in ESPHome's widget style
+        # schema, so hallboard.yaml's last on_boot lambda sets it.
         - keyboard:
             id: pw_kb
             align: BOTTOM_MID
-            x: 0
-            y: 0
             width: 480
             height: 240
-            pad_all: 2
             textarea: pw_ta
             mode: TEXT_LOWER
+            bg_color: 0x0F0E15
+            bg_opa: COVER
+            border_width: 0
+            radius: 0
+            pad_all: 6
+            items:
+              bg_color: 0x292731
+              bg_opa: COVER
+              border_width: 0
+              radius: 12
+              text_color: 0xF5F4F9
+              text_font: fig500_18
+              pressed:
+                bg_color: 0x7A5AF8
+                text_color: 0xFFFFFF
+              checked:
+                bg_color: 0x7A5AF8
+                text_color: 0xFFFFFF
 
 # The design system's type scale. Figtree carries the text, IBM Plex Mono the times, codes and
 # meta lines. Both come from Google Fonts at build time: `gfonts://Family@weight` asks the CSS

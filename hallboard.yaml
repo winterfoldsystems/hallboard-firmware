@@ -113,6 +113,31 @@ esphome:
           }
           // A factory reset is a very long hold; the 0.7 to 6 s band in hardware.yaml opens Wi-Fi
           // setup, so the two never overlap.
+      - lambda: |-
+          // The two pieces of the utility pages' design that ESPHome's LVGL YAML schema has no
+          // key for. Everything else on those pages is declared in ui.yaml.
+          //
+          // 1. The press feedback eases in and out over 120 ms. ui.yaml sets the pressed scale
+          // and the ring; a style transition is what animates them, and it needs a descriptor
+          // the schema cannot express. It is attached to both states so the button eases back
+          // when the finger lifts as well as in when it lands.
+          static const lv_style_prop_t press_props[] = {
+              LV_STYLE_TRANSFORM_SCALE_X, LV_STYLE_TRANSFORM_SCALE_Y,
+              LV_STYLE_OUTLINE_WIDTH, LV_STYLE_OUTLINE_OPA, LV_STYLE_PROP_INV};
+          static lv_style_transition_dsc_t press_tr;
+          lv_style_transition_dsc_init(&press_tr, press_props, lv_anim_path_ease_out, 120, 0,
+                                       nullptr);
+          lv_obj_t* press_btns[] = {id(net0), id(net1), id(net2), id(net3), id(net4), id(net5),
+                                    id(net6), id(wifi_scan_btn), id(wifi_cancel_btn),
+                                    id(wifi_connect_btn), id(wifi_pw_cancel_btn)};
+          for (auto* b : press_btns) {
+            lv_obj_set_style_transition(b, &press_tr, LV_STATE_DEFAULT);
+            lv_obj_set_style_transition(b, &press_tr, LV_STATE_PRESSED);
+          }
+          // 2. The gap between the keyboard's keys. pad_row / pad_column are layout properties
+          // in the schema and not widget style ones, and the keyboard lays itself out.
+          lv_obj_set_style_pad_row(id(pw_kb)->obj, 6, LV_PART_MAIN);
+          lv_obj_set_style_pad_column(id(pw_kb)->obj, 6, LV_PART_MAIN);
 
 packages:
   hardware: !include hardware.yaml
@@ -175,7 +200,7 @@ wifi:
     - lambda: |-
         char ssid[wifi::SSID_BUFFER_SIZE];
         std::string name = wifi::global_wifi_component->wifi_ssid_to(ssid);
-        std::string msg = "Connected to " + name;
+        std::string msg = "Connected to " + name + ".";
         lv_label_set_text(id(wifi_status), msg.c_str());
         hb::g_host.set_network(name);
         hb::g_host.set_status(id(claimed) ? "Wi-Fi connected, fetching the board..."
@@ -283,10 +308,13 @@ script:
             for (auto* b : nb) lv_obj_add_flag(b, LV_OBJ_FLAG_HIDDEN);
             esp_err_t err = tb::wifi_scan_begin();
             if (err == ESP_OK) {
-              lv_label_set_text(id(wifi_status), "Scanning...");
+              lv_label_set_text(id(wifi_status), "Looking for networks.");
               id(scan_at) = millis() + 4000;
             } else {
-              lv_label_set_text(id(wifi_status), (std::string("Scan failed: ") + esp_err_to_name(err) + " • tap Scan to retry").c_str());
+              // The driver's reason is for the log, not for the wall: the only thing to do on
+              // screen is tap the button again.
+              ESP_LOGW("hb", "Wi-Fi scan failed: %s", esp_err_to_name(err));
+              lv_label_set_text(id(wifi_status), "Scan failed. Tap Scan again.");
             }
           };
 
@@ -313,7 +341,7 @@ script:
             ESP_LOGI("hb", "saving Wi-Fi credentials");
             wifi::global_wifi_component->save_wifi_sta(id(pw_ssid), pw);
             lv_textarea_set_text(id(pw_ta), "");
-            lv_label_set_text(id(wifi_status), ("Connecting to " + id(pw_ssid) + "...").c_str());
+            lv_label_set_text(id(wifi_status), ("Connecting to " + id(pw_ssid) + ".").c_str());
             hb::g_host.set_status("Connecting to " + id(pw_ssid) + "...");
             id(lv).show_page(2, LV_SCR_LOAD_ANIM_NONE, 0);
           } else if (msg == "CANCEL") {
@@ -339,7 +367,7 @@ script:
             if (bv == nullptr) return;
             const std::string& uid = bv->uid_at(atoi(msg.c_str() + 5));
             if (uid.empty()) return;
-            lv_label_set_text(id(detail_hdr), "Loading...");
+            lv_label_set_text(id(detail_hdr), "Loading the calling points.");
             lv_label_set_text(id(detail_body), "");
             id(lv).show_page(1, LV_SCR_LOAD_ANIM_NONE, 0);
             id(detail_until) = millis() + 60000;
@@ -832,11 +860,11 @@ interval:
                 lv_obj_add_flag(nb[i], LV_OBJ_FLAG_HIDDEN);
               }
             }
-            std::string st = nets.empty() ? "No networks found • tap Scan to retry"
-                                          : std::to_string(nets.size()) + " networks • tap one to connect";
+            std::string st = nets.empty() ? "No networks found. Tap Scan again."
+                                          : "Tap your network.";
             if (wifi::global_wifi_component->is_connected()) {
               char ssid[wifi::SSID_BUFFER_SIZE];
-              st += std::string(" • now on ") + wifi::global_wifi_component->wifi_ssid_to(ssid);
+              st += std::string(" Now on ") + wifi::global_wifi_component->wifi_ssid_to(ssid) + ".";
             }
             lv_label_set_text(id(wifi_status), st.c_str());
           }
