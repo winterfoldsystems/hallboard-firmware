@@ -302,6 +302,139 @@ inline std::string upper(std::string s) {
   return s;
 }
 
+// The weekday with the day of the month, uppercase: "FRIDAY 18", or "FRI 18" when the face has
+// not the room for the whole word. Empty before the clock has been set, which is the only time
+// the diary has no day to name.
+inline std::string long_day(const esphome::ESPTime &now, bool shortened = false) {
+  static const char *DAYS[] = {"SUNDAY",   "MONDAY", "TUESDAY", "WEDNESDAY",
+                               "THURSDAY", "FRIDAY", "SATURDAY"};
+  int dow = (int) now.day_of_week - 1;
+  if (!now.is_valid() || dow < 0 || dow > 6) return "";
+  std::string day = DAYS[dow];
+  if (shortened) day = day.substr(0, 3);
+  return day + " " + std::to_string((int) now.day_of_month);
+}
+
+// The full weekday behind a day heading such as "Sat 19 Sept", uppercase. A heading the table
+// does not recognise is used as it stands, which is at least the right day.
+inline std::string long_weekday(const std::string &w) {
+  static const char *ABBR[] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
+  static const char *FULL[] = {"SUNDAY",   "MONDAY", "TUESDAY", "WEDNESDAY",
+                               "THURSDAY", "FRIDAY", "SATURDAY"};
+  std::string u = upper(w);
+  if (u.size() >= 3)
+    for (int i = 0; i < 7; i++)
+      if (u.compare(0, 3, ABBR[i]) == 0) return FULL[i];
+  return u;
+}
+
+// "YYYYMMDD" a day later. Midday, so no daylight-saving shift can move the date.
+inline std::string day_after(const std::string &ymd) {
+  if (ymd.size() != 8) return "";
+  int n[8];
+  for (int i = 0; i < 8; i++) {
+    if (ymd[i] < '0' || ymd[i] > '9') return "";
+    n[i] = ymd[i] - '0';
+  }
+  struct tm t = {};
+  t.tm_year = n[0] * 1000 + n[1] * 100 + n[2] * 10 + n[3] - 1900;
+  t.tm_mon = n[4] * 10 + n[5] - 1;
+  t.tm_mday = n[6] * 10 + n[7] + 1;
+  t.tm_hour = 12;
+  t.tm_isdst = -1;
+  if (mktime(&t) == (time_t) -1) return "";
+  char buf[12];
+  strftime(buf, sizeof buf, "%Y%m%d", &t);
+  return buf;
+}
+
+// How long an event has left before it starts, as the raised diary row says it. Empty when
+// either time is unreadable, which is how an event with no start says it has nothing to count.
+inline std::string starts_in(const std::string &t) {
+  int at = hhmm_to_minutes(t), now = hhmm_to_minutes(g_nowhm);
+  if (at < 0 || now < 0) return "";
+  int m = at - now;
+  if (m <= 0) return "now";
+  if (m == 1) return "in 1 minute";
+  if (m < 60) return "in " + std::to_string(m) + " minutes";
+  int h = (m + 30) / 60;
+  return h <= 1 ? "in 1 hour" : "in " + std::to_string(h) + " hours";
+}
+
+// "30m", "1h 15m", "2h", for a resting diary row. Empty when either end is not a time, which is
+// what an event ending on another day (`u` is "Sat 09:00") comes in as.
+inline std::string duration_text(const std::string &t, const std::string &u) {
+  int a = hhmm_to_minutes(t), b = hhmm_to_minutes(u);
+  if (a < 0 || b < 0 || b <= a) return "";
+  int m = b - a, h = m / 60, rest = m % 60;
+  if (h == 0) return std::to_string(m) + "m";
+  return rest == 0 ? std::to_string(h) + "h" : std::to_string(h) + "h " + std::to_string(rest) + "m";
+}
+
+// True when a document's big value really is a number, which is what lets an older weather page
+// stand in for a missing `temp`.
+inline bool is_number(const std::string &v) {
+  size_t i = (!v.empty() && v[0] == '-') ? 1 : 0;
+  if (i >= v.size()) return false;
+  for (; i < v.size(); i++)
+    if (v[i] < '0' || v[i] > '9') return false;
+  return true;
+}
+
+// Swap a panel between a filled card and nothing at all, which is what tells a raised row from a
+// resting one. The old fill has to come off first and which one it was is not recorded.
+inline void set_fill(lv_obj_t *o, Tok tok, bool filled, int radius) {
+  for (int i = 0; i < T_COUNT; i++) lv_obj_remove_style(o, &g_bg[i], 0);
+  lv_obj_set_style_radius(o, filled ? radius : 0, 0);
+  if (!filled) {
+    lv_obj_set_style_bg_opa(o, LV_OPA_TRANSP, 0);
+    return;
+  }
+  lv_obj_add_style(o, &g_bg[tok], 0);
+  lv_obj_set_style_bg_opa(o, LV_OPA_COVER, 0);
+}
+
+// OfflineCard: the one card a face shows when it has nothing to draw, or nothing to draw it
+// from. A mono label, a sentence which is what sets the card's height, and a mono footer.
+class EmptyCard {
+ public:
+  void build(lv_obj_t *parent, int x, int y, int w) {
+    if (root_ != nullptr) return;
+    root_ = mk_panel(parent, x, y, w, TEXT_Y + 56, T_DONEBG, 20);
+    label_ = mk_label(root_, PAD, PAD, w - 2 * PAD, 20, F(g_fonts.mono15), T_CHALK50, "");
+    tracked(label_, 1);
+    text_ = mk_label(root_, PAD, TEXT_Y, w - 2 * PAD, 0, F(g_fonts.sans400_18), T_CHALK70, "");
+    lv_label_set_long_mode(text_, LV_LABEL_LONG_MODE_WRAP);
+    foot_ = mk_label(root_, PAD, TEXT_Y + 36, w - 2 * PAD, 20, F(g_fonts.mono15), T_CHALK50, "");
+    tracked(foot_, 1);
+    set_hidden(root_, true);
+  }
+
+  // The card's height follows its sentence, which is why the footer is placed after the text has
+  // been laid out and not before.
+  void set(const std::string &label, const std::string &text, const std::string &foot) {
+    if (root_ == nullptr) return;
+    lv_label_set_text(label_, label.c_str());
+    lv_label_set_text(text_, text.c_str());
+    lv_label_set_text(foot_, foot.c_str());
+    set_hidden(foot_, foot.empty());
+    set_hidden(root_, false);
+    lv_obj_update_layout(root_);
+    int th = lv_obj_get_height(text_);
+    lv_obj_set_pos(foot_, PAD, TEXT_Y + th + 12);
+    lv_obj_set_height(root_, TEXT_Y + th + (foot.empty() ? 0 : 32) + PAD);
+  }
+  void hide() {
+    if (root_ != nullptr) set_hidden(root_, true);
+  }
+
+ private:
+  // 24 of padding, the 20 px label and the design's 12 px gap.
+  static const int PAD = 24, TEXT_Y = 56;
+
+  lv_obj_t *root_ = nullptr, *label_ = nullptr, *text_ = nullptr, *foot_ = nullptr;
+};
+
 // ---------------------------------------------------------------- chrome
 // The band across the top of every face: a short line on the left, optionally with a hue dot in
 // front of it, and a stamp or a time on the right. 28 px tall, inset by the face's margin.
@@ -483,37 +616,55 @@ class PageView {
   virtual void apply(const Page &pg) {}
   virtual void tick(esphome::ESPTime now) {}
 
-  // A transient line (Wi-Fi, backend errors) shown where the page has room for it. `problem` is
-  // true when the message is something support would want to see; the clock page shows only
-  // those, every other page puts the lot on a small line at the foot of the screen. The faces
-  // decide where it belongs from S4 on; until then this is what keeps it visible.
+  // A transient line (Wi-Fi, backend errors). A content face shows problems only: an
+  // informational status is dropped, because the stamp already says how old what is on screen
+  // is, which is all such a face would gain from one. The clock and the pairing page, which have
+  // no stamp, override this.
   virtual void set_status(const std::string &msg, bool problem) {
-    status_text_ = msg;
-    if (status_ == nullptr) return;
-    lv_label_set_text(status_, msg.c_str());
+    if (!problem) return;
+    show_problem_(msg);
   }
 
   lv_obj_t *root() const { return root_; }
   const std::string &id() const { return id_; }
   char type() const { return type_; }
+  // The document's module id, kept so PageHost can tell a weather page from a to-do list when it
+  // reconciles: both are generic pages and they are not the same face.
+  const std::string &module() const { return module_; }
+  void set_module(const std::string &m) { module_ = m; }
 
  protected:
-  // The chrome the three content templates share: the strip, with the page title on the left and
-  // the stamp (or, until one arrives, the clock) on the right, and the status line at the foot.
+  // The chrome the generic template shares with the board: the strip, with the page title on the
+  // left and the stamp (or, until one arrives, the clock) on the right.
   void build_header_(const char *title) {
     strip_.build(root_, margin_);
     strip_.set_left_font(F(g_fonts.sans600_20));
     strip_.set_left(title, T_CHALK);
-    status_ = mk_label(root_, margin_, 452, 480 - 2 * margin_, 20, F(g_fonts.mono15), T_CHALK50, "");
+    build_problem_();
+  }
+  // A problem worth support seeing, on one line just above the page dots, as the board has it.
+  void build_problem_() {
+    if (status_ != nullptr) return;
+    status_ = mk_label(root_, margin_, 424, 480 - 2 * margin_, 20, F(g_fonts.mono15), T_CHALK50, "");
     tracked(status_, 1);
     lv_label_set_long_mode(status_, LV_LABEL_LONG_MODE_DOTS);
-    if (!status_text_.empty()) lv_label_set_text(status_, status_text_.c_str());
+    lv_label_set_text(status_, status_text_.c_str());
+    set_hidden(status_, status_text_.empty());
+  }
+  void show_problem_(const std::string &msg) {
+    if (status_text_ == msg) return;
+    status_text_ = msg;
+    if (status_ == nullptr) return;
+    lv_label_set_text(status_, msg.c_str());
+    set_hidden(status_, msg.empty());
   }
   void set_title_(const std::string &title) { strip_.set_left(title, T_CHALK); }
   // The freshness stamp owns the right of the strip once a document has been through the page.
+  // Live is the quieter tone of the two, as it is on the board: a stamp that has gone to
+  // SHOWING is the one worth reading.
   void set_stamp_(uint32_t asof, bool stale) {
     stamp_ = stamp_text(asof, stale);
-    strip_.set_right(stamp_, T_CHALK70);
+    strip_.set_right(stamp_, stale_now(asof, stale) ? T_CHALK70 : T_CHALK50);
   }
   void tick_header_(const esphome::ESPTime &now) {
     if (!stamp_.empty()) return;   // a stamp says more than the time does
@@ -523,7 +674,7 @@ class PageView {
   lv_obj_t *root_ = nullptr;
   lv_obj_t *status_ = nullptr;
   StatusStrip strip_;
-  std::string id_, status_text_, stamp_;
+  std::string id_, module_, status_text_, stamp_;
   char type_;
   int margin_;
 };
@@ -1014,10 +1165,7 @@ class BoardView : public PageView {
     build_card_();
 
     // A problem worth support seeing, just above the dots. Informational statuses never reach it.
-    problem_ = mk_label(root_, PAD, 424, ROW_W, 20, sf, T_CHALK50, "");
-    tracked(problem_, 1);
-    lv_label_set_long_mode(problem_, LV_LABEL_LONG_MODE_DOTS);
-    set_hidden(problem_, true);
+    build_problem_();
 
     // A tap anywhere refreshes; the row hit rects sit on top and add the long press. Neither is
     // scrollable, so a horizontal drag still reaches the carousel.
@@ -1079,13 +1227,6 @@ class BoardView : public PageView {
     if (g_nowhm == last_hm_) return;
     last_hm_ = g_nowhm;
     refresh_stamp_();
-  }
-
-  // A board shows problems only. An informational status is dropped: the stamp already says how
-  // old the data is, which is all this face would gain from one.
-  void set_status(const std::string &msg, bool problem) override {
-    if (!problem) return;
-    show_problem_(msg);
   }
 
   const std::string &uid_at(int i) const {
@@ -1181,13 +1322,6 @@ class BoardView : public PageView {
     set_tok(stamp_lbl_, old ? T_CHALK70 : T_CHALK50);
   }
 
-  void show_problem_(const std::string &msg) {
-    if (problem_text_ == msg) return;
-    problem_text_ = msg;
-    lv_label_set_text(problem_, msg.c_str());
-    set_hidden(problem_, msg.empty());
-  }
-
   static void touch_cb_(lv_event_t *e) { emit("TOUCH"); }
   static void long_cb_(lv_event_t *e) {
     lv_obj_t *o = lv_event_get_target_obj(e);
@@ -1198,40 +1332,57 @@ class BoardView : public PageView {
   static const int CARD_TEXT_Y = 56;
 
   Row rows_[ROWS_SHOWN];
-  lv_obj_t *title_ = nullptr, *stamp_lbl_ = nullptr, *problem_ = nullptr;
+  lv_obj_t *title_ = nullptr, *stamp_lbl_ = nullptr;
   lv_obj_t *card_ = nullptr, *card_label_ = nullptr, *card_text_ = nullptr, *card_foot_ = nullptr;
   std::vector<std::string> uids_;
-  std::string module_, problem_text_, last_hm_;
+  std::string last_hm_;
   uint32_t asof_ = 0;
   bool stale_ = false, stamp_stale_ = false, arrivals_ = false;
 };
 
-// ---- agenda: the 1a render_calendar algorithm, with cards created on demand instead of a pool of
-// 64 hidden objects.
+// ---- day: the diary, laid out as DayFace in the design system.
+//
+// 24 px of padding, the strip at the top carrying the day and how much of it is left, then a
+// vertical scroller from 68 to 464 holding seven days of rows. The scroller takes vertical drags
+// only, so a horizontal flick chains up to the carousel instead of being eaten here.
+//
+// Today's own heading is not drawn: the strip already names the day, and the face reads better
+// opening on the next thing than on a word. Every other day keeps its heading.
+//
+// A row is 60 tall, the raised one 80 for its second line, with 8 between them. The raised row is
+// the next thing still to come today; everything already over is dropped, as it always was.
 class AgendaView : public PageView {
  public:
   static const int MAX_CARDS = 60, MAX_HEADS = 8;
 
   AgendaView(lv_obj_t *parent, const std::string &id) : PageView(parent, id, 'a') {
-    build_header_("Calendar");
-    // Vertical only, so a horizontal drag chains up to the carousel instead of being eaten here.
-    list_ = mk_obj(root_, 0, 56, 480, 378);
+    strip_.build(root_, margin_);
+    list_ = mk_obj(root_, 0, LIST_Y, 480, LIST_BOTTOM - LIST_Y);
     lv_obj_add_flag(list_, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(list_, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_scroll_dir(list_, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(list_, LV_SCROLLBAR_MODE_AUTO);
     lv_obj_add_event_cb(list_, touch_cb_, LV_EVENT_SHORT_CLICKED, nullptr);
+    empty_.build(root_, margin_, LIST_Y, ROW_W);
+    build_problem_();
   }
 
   void apply(const Page &pg) override {
     events_ = pg.events;
     asof_ = pg.asof;
     stale_ = pg.stale;
-    if (!pg.title.empty()) set_title_(pg.title);
     render();
   }
 
-  void tick(esphome::ESPTime now) override { tick_header_(now); }
+  // The whole face is rebuilt on the minute: which event is next, how long it is until it starts
+  // and how much of today is left all move with the clock, not with the document.
+  void tick(esphome::ESPTime now) override {
+    if (g_nowhm == last_hm_ && day_ == long_day(now)) return;
+    last_hm_ = g_nowhm;
+    day_ = long_day(now);
+    short_day_ = long_day(now, true);
+    render();
+  }
 
   void render() {
     for (auto &c : cards_) set_hidden(c.box, true);
@@ -1239,70 +1390,142 @@ class AgendaView : public PageView {
       set_hidden(h.text, true);
       set_hidden(h.rule, true);
     }
-    const int CARD_H = 40, GAP = 6, HEAD_GAP = 14;
-    int card = 0, head = 0, y = 16, shown = 0;  // start clear of the rule under the title
+    tomorrow_ = day_after(g_today);
+    // The next thing today: the first timed event still to come, which is the one the face
+    // raises. An all-day event is never it; it has no time to count down to.
+    const AgendaEvent *next = nullptr;
+    int today = 0;
+    for (const auto &it : events_) {
+      if (spent_(it) || it.d != g_today) continue;
+      today++;
+      if (next == nullptr && !it.all_day) next = &it;
+    }
+    strip_.set_left(head_text_(today), T_CALENDAR);
+    set_stamp_(asof_, stale_);
+
+    int card = 0, head = 0, y = 0, shown = 0;
+    bool after_row = false;   // a hairline goes between two resting rows and nowhere else
     std::string last_day;
     for (const auto &it : events_) {
       if (card >= MAX_CARDS) break;
-      // hide today's timed events that have already ended
-      if (!it.all_day && it.d == g_today && !g_nowhm.empty() && it.u.size() == 5 && it.u <= g_nowhm) continue;
+      if (spent_(it)) continue;
       if (it.w != last_day) {
-        if (head >= MAX_HEADS) break;
-        if (!last_day.empty()) y += HEAD_GAP - GAP;
-        Head &h = ensure_head_(head);
-        bool today = it.d == g_today;
-        set_tok(h.text, today ? T_CHALK : T_CHALK50);
-        place_label_(h.text, 14, y, 452, upper(it.w) + (today ? "   TODAY" : ""));
-        lv_obj_set_pos(h.rule, 14, y + 26);
-        set_hidden(h.rule, false);
-        head++;
-        y += 36;
+        if (!last_day.empty()) y += HEAD_GAP;
+        if (it.d != g_today) {
+          if (head >= MAX_HEADS) break;
+          Head &h = ensure_head_(head);
+          place_label_(h.text, margin_, y, ROW_W, heading_(it));
+          lv_obj_set_pos(h.rule, margin_, y + 26);
+          set_hidden(h.rule, false);
+          head++;
+          y += HEAD_H;
+        }
         last_day = it.w;
+        after_row = false;
       }
-      bool has_end = !it.all_day && !it.u.empty() && it.u != it.t;
       Card &c = ensure_card_(card);
-      lv_obj_set_pos(c.box, 14, y);
-      lv_obj_set_height(c.box, CARD_H);
-      set_hidden(c.box, false);
-      // one line: start, title, end time right-aligned in grey
-      place_label_(c.a, 14, 8, 82, it.all_day ? "All day" : it.t);
-      std::string endtxt = has_end ? it.u : "";
-      int title_w = endtxt.empty() ? 336 : 336 - 90;
-      place_label_(c.c, 102, 8, title_w, it.s);
-      place_label_(c.b, 348, 10, 90, endtxt);
-      y += CARD_H + GAP;
+      bool raised = &it == next;
+      fill_row_(c, it, raised, y, raised || !after_row);
+      y += (raised ? RAISED_H : ROW_H) + GAP;
       card++;
       shown++;
+      after_row = !raised;
     }
-    if (shown == 0) {
-      Head &h = ensure_head_(0);
-      set_tok(h.text, T_CHALK);
-      place_label_(h.text, 14, 16, 452, asof_ ? "Nothing in the next 7 days" : "Loading...");
+    if (shown > 0) {
+      empty_.hide();
+      return;
     }
-    set_stamp_(asof_, stale_);
+    // Seven days with nothing in them is a result, not a failure. The card says so in the same
+    // shape the board's empty state uses.
+    empty_.set("NOTHING PLANNED", "Nothing in the diary this week. Enjoy it.",
+               asof_ == 0 ? std::string() : "SHOWING " + hhmm_of(asof_));
   }
 
  private:
+  // The face's geometry, from DayFace and AgendaRow: rows 432 wide inside a 24 px margin, 16 of
+  // padding in the raised one and 12/16 in the rest, a 52 px time gutter and a 14 px gap after it.
+  static const int LIST_Y = 68, LIST_BOTTOM = 464, ROW_W = 432, ROW_H = 60, RAISED_H = 80;
+  static const int GAP = 8, HEAD_H = 38, HEAD_GAP = 8, PAD = 16, TIME_W = 52, TEXT_X = 82;
+  static const int DUR_W = 84;
+
   struct Card {
-    lv_obj_t *box = nullptr, *a = nullptr, *b = nullptr, *c = nullptr;
+    lv_obj_t *box = nullptr, *rule = nullptr, *time = nullptr, *title = nullptr, *meta = nullptr;
   };
   struct Head {
     lv_obj_t *text = nullptr, *rule = nullptr;
   };
 
+  // Today's timed events that have already ended are not the diary any more.
+  static bool spent_(const AgendaEvent &e) {
+    return !e.all_day && e.d == g_today && !g_nowhm.empty() && e.u.size() == 5 && e.u <= g_nowhm;
+  }
+
+  // "FRIDAY 18 · 4 EVENTS", or what is left of it before the clock has been set. The strip's
+  // left half holds 26 mono characters; past that the day goes to its short form rather than
+  // the line being cut, which is only ever a long weekday with nothing on it.
+  std::string head_text_(int today) const {
+    std::string count = today == 0   ? "NOTHING TODAY"
+                        : today == 1 ? "1 EVENT"
+                                     : std::to_string(today) + " EVENTS";
+    if (day_.empty()) return count;
+    std::string line = day_ + " \xC2\xB7 " + count;
+    // The middle dot is two bytes and one character, so the count is off by one either way.
+    if (line.size() - 1 > 26) line = short_day_ + " \xC2\xB7 " + count;
+    return line;
+  }
+  std::string heading_(const AgendaEvent &e) const {
+    if (!tomorrow_.empty() && e.d == tomorrow_) return "TOMORROW";
+    return long_weekday(e.w);
+  }
+
+  // One row, in either of its two shapes. The objects are the same four either way; what changes
+  // is the fill, the type and where the second line goes.
+  void fill_row_(Card &c, const AgendaEvent &e, bool raised, int y, bool hide_rule) {
+    lv_obj_set_pos(c.box, margin_, y);
+    lv_obj_set_size(c.box, ROW_W, raised ? RAISED_H : ROW_H);
+    set_fill(c.box, T_RAISED, raised, 16);
+    set_hidden(c.box, false);
+    set_hidden(c.rule, hide_rule);
+    int time_y = ((raised ? RAISED_H : ROW_H) - 21) / 2;
+    if (raised) {
+      // The time keeps the gutter it has in a resting row so the column runs straight down the
+      // face, and the second line says how long there is rather than repeating the end time.
+      place_label_(c.time, PAD, PAD + 4, TIME_W, e.all_day ? "" : e.t);
+      set_tok(c.time, T_TIME2);
+      place_label_(c.title, TEXT_X, PAD, ROW_W - TEXT_X - PAD, e.s);
+      lv_obj_set_style_text_font(c.title, F(g_fonts.sans600_20), 0);
+      set_tok(c.title, T_CHALK);
+      std::string sub = e.all_day ? std::string("All day") : starts_in(e.t);
+      if (!e.l.empty()) sub += (sub.empty() ? "" : " \xC2\xB7 ") + e.l;
+      place_label_(c.meta, TEXT_X, PAD + 28, ROW_W - TEXT_X - PAD, sub);
+      lv_obj_set_style_text_font(c.meta, F(g_fonts.sans500_16), 0);
+      lv_obj_set_style_text_align(c.meta, LV_TEXT_ALIGN_LEFT, 0);
+      set_tok(c.meta, T_CHALK70);
+      return;
+    }
+    place_label_(c.time, PAD, time_y, TIME_W, e.all_day ? "" : e.t);
+    set_tok(c.time, T_HOUR);
+    place_label_(c.title, TEXT_X, time_y - 2, ROW_W - TEXT_X - PAD - DUR_W - 8, e.s);
+    lv_obj_set_style_text_font(c.title, F(g_fonts.sans500_18), 0);
+    set_tok(c.title, T_TITLE2);
+    place_label_(c.meta, ROW_W - PAD - DUR_W, time_y, DUR_W,
+                 e.all_day ? std::string("All day") : duration_text(e.t, e.u));
+    lv_obj_set_style_text_font(c.meta, F(g_fonts.mono15), 0);
+    lv_obj_set_style_text_align(c.meta, LV_TEXT_ALIGN_RIGHT, 0);
+    set_tok(c.meta, T_CHALK50);
+  }
+
   Card &ensure_card_(int i) {
     while ((int) cards_.size() <= i) {
       Card c;
-      c.box = mk_card(list_, 14, 0, 452, 40);
+      c.box = mk_obj(list_, margin_, 0, ROW_W, ROW_H);
       set_hidden(c.box, true);
-      c.a = mk_label(c.box, 14, 8, 200, 26, F(g_fonts.mono16), T_TIME2);
-      tracked(c.a, 1);
-      lv_label_set_long_mode(c.a, LV_LABEL_LONG_MODE_DOTS);
-      c.b = mk_label(c.box, 224, 8, 214, 26, F(g_fonts.sans500_16), T_CHALK50);
-      lv_label_set_long_mode(c.b, LV_LABEL_LONG_MODE_DOTS);
-      lv_obj_set_style_text_align(c.b, LV_TEXT_ALIGN_RIGHT, 0);
-      c.c = mk_label(c.box, 14, 34, 424, 26, F(g_fonts.sans500_18), T_TITLE2);
-      lv_label_set_long_mode(c.c, LV_LABEL_LONG_MODE_DOTS);
+      c.rule = mk_rule(c.box, 0, 0, ROW_W, T_LINE);
+      c.time = mk_label(c.box, PAD, 0, TIME_W, 22, F(g_fonts.mono16), T_HOUR);
+      c.title = mk_label(c.box, TEXT_X, 0, 200, 26, F(g_fonts.sans500_18), T_TITLE2);
+      lv_label_set_long_mode(c.title, LV_LABEL_LONG_MODE_DOTS);
+      c.meta = mk_label(c.box, TEXT_X, 0, 200, 22, F(g_fonts.mono15), T_CHALK50);
+      lv_label_set_long_mode(c.meta, LV_LABEL_LONG_MODE_DOTS);
       cards_.push_back(c);
     }
     return cards_[i];
@@ -1310,11 +1533,11 @@ class AgendaView : public PageView {
   Head &ensure_head_(int i) {
     while ((int) heads_.size() <= i) {
       Head h;
-      h.text = mk_label(list_, 14, 0, 452, 24, F(g_fonts.mono15), T_CHALK50);
+      h.text = mk_label(list_, margin_, 0, ROW_W, 22, F(g_fonts.mono15), T_CHALK50);
       tracked(h.text, 1);
       lv_label_set_long_mode(h.text, LV_LABEL_LONG_MODE_DOTS);
       set_hidden(h.text, true);
-      h.rule = mk_rule(list_, 14, 0, 452, T_DIVIDER);
+      h.rule = mk_rule(list_, margin_, 0, ROW_W, T_DIVIDER);
       set_hidden(h.rule, true);
       heads_.push_back(h);
     }
@@ -1330,22 +1553,292 @@ class AgendaView : public PageView {
   static void touch_cb_(lv_event_t *e) { emit("TOUCH"); }
 
   lv_obj_t *list_ = nullptr;
+  EmptyCard empty_;
   std::vector<Card> cards_;
   std::vector<Head> heads_;
   std::vector<AgendaEvent> events_;
+  // The day the strip names, as the tick last worked it out, and the day after today, which is
+  // what tells a "TOMORROW" heading from a weekday one.
+  std::string day_, short_day_, last_hm_, tomorrow_;
   uint32_t asof_ = 0;
   bool stale_ = false;
 };
 
-// ---- generic: the module template. Up to eight rows of icon, value and two text lines. The rows
-// live in a vertical scroller so eight of them are reachable on a 480 px screen.
+// ---- sky: the weather face, laid out as SkyFace in the design system.
+//
+// 24 px of padding, the place and the stamp on a 28 px header, one big temperature with the day
+// in a line and a sentence under it, and the hours to come as a strip of bars along the bottom.
+//
+// No icons are drawn here at all: the Material glyphs are on their way out and the weather set
+// the design wants has not been drawn yet. The bars and the numbers say it in the meantime.
+class SkyView : public PageView {
+ public:
+  SkyView(lv_obj_t *parent, const std::string &id) : PageView(parent, id, 'g') {
+    strip_.build(root_, margin_);
+    // The hero is auto-width so `feels` can be put beside it, on its baseline, once the number
+    // is known. The degree sign is a real glyph in the 88 px face, not a drawn ring.
+    hero_ = mk_label(root_, margin_, HEAD_BOTTOM, 0, 0, F(g_fonts.hero88), T_CHALK, "");
+    tracked(hero_, -4);
+    feels_ = mk_label(root_, margin_, HEAD_BOTTOM, 0, 0, F(g_fonts.sans500_20), T_CHALK70, "");
+    head_ = mk_label(root_, margin_, HEAD_BOTTOM, TEXT_W, 0, F(g_fonts.sans500_20), T_HEADLINE, "");
+    lv_label_set_long_mode(head_, LV_LABEL_LONG_MODE_DOTS);
+    sent_ = mk_label(root_, margin_, HEAD_BOTTOM, TEXT_W, 0, F(g_fonts.sans400_18), T_CHALK70, "");
+    lv_label_set_long_mode(sent_, LV_LABEL_LONG_MODE_WRAP);
+    build_strip_();
+    empty_.build(root_, margin_, HEAD_BOTTOM + 40, TEXT_W);
+    build_problem_();
+  }
+
+  void apply(const Page &pg) override {
+    asof_ = pg.asof;
+    stale_ = pg.stale;
+    strip_.set_left(pg.place.empty() ? std::string("WEATHER") : upper(pg.place), T_WEATHER);
+    set_stamp_(asof_, stale_);
+
+    std::string temp = pg.temp, feels = pg.feels, head = pg.head, sent = pg.sent;
+    bool hours = !temp.empty() && !pg.hours.empty();
+    if (temp.empty()) {
+      // A document from a backend older than this face, or one cached before it: the first row's
+      // big value is the temperature and its second line is all the headline there is. Nothing
+      // else on the page can be trusted to be about the weather, so nothing else is shown.
+      if (!pg.grows.empty() && is_number(pg.grows[0].value)) {
+        temp = pg.grows[0].value;
+        head = pg.grows[0].b;
+      }
+      feels.clear();
+      sent.clear();
+    }
+    if (temp.empty()) {
+      for (lv_obj_t *o : {hero_, feels_, head_, sent_, card_}) set_hidden(o, true);
+      empty_.set("OFFLINE", "Can't reach the forecast.",
+                 asof_ == 0 ? std::string() : "SHOWING " + hhmm_of(asof_));
+      return;
+    }
+    empty_.hide();
+    label_text(hero_, temp + "\xC2\xB0");              // U+00B0
+    label_text(feels_, feels.empty() ? "" : "feels " + feels + "\xC2\xB0");
+    label_text(head_, head);
+    label_text(sent_, sent);
+    for (lv_obj_t *o : {hero_, feels_, head_, sent_}) set_hidden(o, false);
+    set_hidden(feels_, feels.empty());
+    set_hidden(head_, head.empty());
+    set_hidden(sent_, sent.empty());
+    set_hidden(card_, !hours);
+    if (hours) fill_strip_(pg.hours);
+    // With no strip to draw, the block has the whole face to be centred on rather than the top
+    // of it: a page carrying only rows should not look like one with something missing.
+    centre_(hours ? card_y_ : 480 - margin_);
+  }
+
+  void tick(esphome::ESPTime now) override { tick_header_(now); }
+
+ private:
+  // The face's geometry: the header ends at 52, the strip card's bottom sits on the 24 px margin
+  // and the block between them is centred on what is left.
+  static const int HEAD_BOTTOM = 52, TEXT_W = 432, GAP = 10;
+  // The strip card, from SkyFace: six columns 60 wide with 8 between them inside 16 of padding,
+  // and a bar area of 68. The card is taller than the design's 128 because a rasterised 16 px
+  // label and a 14 px one need more room than the mock's line boxes did.
+  static const int COLS = 6, COL_W = 60, COL_PITCH = 68, CARD_PAD = 16, BAR_MAX = 68;
+
+  struct Col {
+    lv_obj_t *root = nullptr, *temp = nullptr, *bar = nullptr, *hour = nullptr;
+  };
+
+  void build_strip_() {
+    int th = lv_font_get_line_height(F(g_fonts.sans500_16));
+    int hh = lv_font_get_line_height(F(g_fonts.mono14));
+    int inner = th + 6 + BAR_MAX + 6 + hh;
+    card_h_ = inner + 2 * CARD_PAD;
+    card_y_ = 480 - margin_ - card_h_;
+    card_ = mk_panel(root_, margin_, card_y_, TEXT_W, card_h_, T_CARD, 16);
+    set_hidden(card_, true);
+    for (int i = 0; i < COLS; i++) {
+      Col &c = cols_[i];
+      c.root = mk_obj(card_, CARD_PAD + COL_PITCH * i, CARD_PAD, COL_W, inner);
+      c.temp = mk_label(c.root, 0, 0, COL_W, th, F(g_fonts.sans500_16), T_HEADLINE, "");
+      lv_obj_set_style_text_align(c.temp, LV_TEXT_ALIGN_CENTER, 0);
+      // Anchored at the bottom of the bar area, which is what makes a row of bars a chart.
+      c.bar = mk_panel(c.root, 0, th + 6, COL_W, BAR_MAX, T_WEATHER, 4);
+      c.hour = mk_label(c.root, 0, th + 12 + BAR_MAX, COL_W, hh, F(g_fonts.mono14), T_HOUR, "");
+      lv_obj_set_style_text_align(c.hour, LV_TEXT_ALIGN_CENTER, 0);
+      set_hidden(c.root, true);
+    }
+    bar_top_ = th + 6;
+  }
+
+  // The focus column is the first hour at half a chance of rain or more, which is the hour the
+  // sentence is about. With nothing above half, the next hour is the one to read.
+  void fill_strip_(const std::vector<HourSlot> &hours) {
+    int focus = 0;
+    for (size_t i = 0; i < hours.size(); i++)
+      if (hours[i].r >= 50) {
+        focus = (int) i;
+        break;
+      }
+    for (int i = 0; i < COLS; i++) {
+      Col &c = cols_[i];
+      if (i >= (int) hours.size()) {
+        set_hidden(c.root, true);
+        continue;
+      }
+      const HourSlot &s = hours[i];
+      label_text(c.temp, s.t.empty() ? "" : s.t + "\xC2\xB0");
+      set_tok(c.temp, i == focus ? T_CHALK : T_HEADLINE);
+      // A dry hour keeps a stub: an empty column would read as a missing reading.
+      int h = s.r * BAR_MAX / 100;
+      if (h < 4) h = 4;
+      lv_obj_set_pos(c.bar, 0, bar_top_ + BAR_MAX - h);
+      lv_obj_set_height(c.bar, h);
+      int d = i > focus ? i - focus : focus - i;
+      lv_obj_set_style_opa(c.bar, d == 0 ? 255 : d == 1 ? 191 : d == 2 ? 115 : 77, 0);
+      label_text(c.hour, s.h);
+      set_tok(c.hour, i == focus ? T_TIME2 : T_HOUR);
+      set_hidden(c.root, false);
+    }
+  }
+
+  // The middle block is centred on what the header and the strip card leave, after the sentence
+  // has been laid out: one line or two changes how tall the block is.
+  void centre_(int bottom) {
+    lv_obj_update_layout(root_);
+    int hero_h = lv_obj_get_height(hero_);
+    int head_h = lv_obj_has_flag(head_, LV_OBJ_FLAG_HIDDEN) ? 0 : lv_obj_get_height(head_);
+    int sent_h = lv_obj_has_flag(sent_, LV_OBJ_FLAG_HIDDEN) ? 0 : lv_obj_get_height(sent_);
+    int total = hero_h + (head_h > 0 ? GAP + head_h : 0) + (sent_h > 0 ? GAP + sent_h : 0);
+    int top = HEAD_BOTTOM + (bottom - HEAD_BOTTOM - total) / 2;
+    if (top < HEAD_BOTTOM + 8) top = HEAD_BOTTOM + 8;
+    lv_obj_set_pos(hero_, margin_, top);
+    // `feels` sits on the hero's baseline, not on its box, which is what puts a 20 px word on
+    // the same line as an 88 px number.
+    const lv_font_t *hf = F(g_fonts.hero88), *ff = F(g_fonts.sans500_20);
+    int base = (lv_font_get_line_height(hf) - hf->base_line) -
+               (lv_font_get_line_height(ff) - ff->base_line);
+    lv_obj_set_pos(feels_, margin_ + lv_obj_get_width(hero_) + 12, top + base);
+    int y = top + hero_h;
+    if (head_h > 0) {
+      y += GAP;
+      lv_obj_set_pos(head_, margin_, y);
+      y += head_h;
+    }
+    if (sent_h > 0) lv_obj_set_pos(sent_, margin_, y + GAP);
+  }
+
+  lv_obj_t *hero_ = nullptr, *feels_ = nullptr, *head_ = nullptr, *sent_ = nullptr;
+  lv_obj_t *card_ = nullptr;
+  Col cols_[COLS];
+  EmptyCard empty_;
+  int card_h_ = 0, card_y_ = 0, bar_top_ = 0;
+  uint32_t asof_ = 0;
+  bool stale_ = false;
+};
+
+// ---- list: the to-do face, laid out as ListFace in the design system.
+//
+// 24 px of padding, the short date and the stamp on the strip, the page's own title as an
+// eyebrow, then the open items as rings. Nothing is ever ticked here: a done item never reaches
+// the document, so there is no done state to draw and nothing on this face is a control.
+class ListView : public PageView {
+ public:
+  static const int MAX_ROWS = 8;
+
+  ListView(lv_obj_t *parent, const std::string &id) : PageView(parent, id, 'g') {
+    strip_.build(root_, margin_);
+    eyebrow_ = mk_label(root_, margin_, EYEBROW_Y, ROW_W, 22, F(g_fonts.mono16), T_REMINDERS, "");
+    tracked(eyebrow_, 1);
+    lv_label_set_long_mode(eyebrow_, LV_LABEL_LONG_MODE_DOTS);
+    // Eight rows are more than the screen holds, so they scroll, vertically only, as the diary's
+    // do: a horizontal flick is the carousel's.
+    list_ = mk_obj(root_, 0, LIST_Y, 480, LIST_BOTTOM - LIST_Y);
+    lv_obj_add_flag(list_, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(list_, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_scroll_dir(list_, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(list_, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_add_event_cb(list_, touch_cb_, LV_EVENT_SHORT_CLICKED, nullptr);
+    empty_.build(root_, margin_, LIST_Y, ROW_W);
+    build_problem_();
+  }
+
+  void apply(const Page &pg) override {
+    label_text(eyebrow_, upper(pg.title));
+    set_stamp_(pg.asof, pg.stale);
+    for (auto &r : rows_) set_hidden(r.box, true);
+    int n = (int) pg.grows.size();
+    if (n > MAX_ROWS) n = MAX_ROWS;
+    for (int i = 0; i < n; i++) {
+      const GenericRow &d = pg.grows[i];
+      Row &r = ensure_row_(i);
+      // The item's own text is `a` (docs/screen-document.md); `v` is the day count, and is only
+      // worth reading as the title on a page that put the text there instead.
+      label_text(r.title, d.a.empty() ? d.value : d.a);
+      std::string due = upper(d.b);
+      label_text(r.due, due);
+      set_tok(r.due, due.find("OVERDUE") == std::string::npos ? T_CHALK50 : T_LATE);
+      set_hidden(r.box, false);
+    }
+    if (n > 0) {
+      empty_.hide();
+      return;
+    }
+    empty_.set("ALL DONE", "Nothing on the list. Enjoy it.",
+               pg.asof == 0 ? std::string() : "SHOWING " + hhmm_of(pg.asof));
+  }
+
+  // The strip carries the short date, as the clock's does, and the stamp owns the other end.
+  void tick(esphome::ESPTime now) override {
+    if (g_nowhm == last_hm_) return;
+    last_hm_ = g_nowhm;
+    strip_.set_left(now.is_valid() ? ClockView::short_date(now) : std::string(), T_CHALK70);
+  }
+
+ private:
+  // ReminderCheck at its large size: a 60 px row with 16 of padding, a 30 px ring and 14 after
+  // it, on a 12 px gap. The eyebrow takes the 16 px of air under the strip.
+  static const int EYEBROW_Y = 68, LIST_Y = 102, LIST_BOTTOM = 464, ROW_W = 432, ROW_H = 60;
+  static const int GAP = 12, PAD = 16, RING = 30, TEXT_X = 60, DUE_W = 110;
+
+  struct Row {
+    lv_obj_t *box = nullptr, *ring = nullptr, *title = nullptr, *due = nullptr;
+  };
+
+  Row &ensure_row_(int i) {
+    while ((int) rows_.size() <= i) {
+      Row r;
+      r.box = mk_panel(list_, margin_, (ROW_H + GAP) * (int) rows_.size(), ROW_W, ROW_H, T_CARD, 16);
+      set_hidden(r.box, true);
+      // An outline, not a fill: a ring is an item still open, and there is nothing to tick it.
+      r.ring = mk_obj(r.box, PAD, (ROW_H - RING) / 2, RING, RING);
+      lv_obj_set_style_radius(r.ring, LV_RADIUS_CIRCLE, 0);
+      lv_obj_set_style_border_width(r.ring, 3, 0);
+      lv_obj_set_style_border_color(r.ring, col(T_REMINDERS), 0);
+      r.title = mk_label(r.box, TEXT_X, 16, ROW_W - TEXT_X - PAD - DUE_W - 8, 28,
+                         F(g_fonts.sans500_22), T_CHALK);
+      lv_label_set_long_mode(r.title, LV_LABEL_LONG_MODE_DOTS);
+      r.due = mk_label(r.box, ROW_W - PAD - DUE_W, 20, DUE_W, 20, F(g_fonts.mono15), T_CHALK50);
+      tracked(r.due, 1);
+      lv_obj_set_style_text_align(r.due, LV_TEXT_ALIGN_RIGHT, 0);
+      lv_label_set_long_mode(r.due, LV_LABEL_LONG_MODE_DOTS);
+      rows_.push_back(r);
+    }
+    return rows_[i];
+  }
+  static void touch_cb_(lv_event_t *e) { emit("TOUCH"); }
+
+  lv_obj_t *eyebrow_ = nullptr, *list_ = nullptr;
+  EmptyCard empty_;
+  std::vector<Row> rows_;
+  std::string last_hm_;
+};
+
+// ---- generic: the module template, for a module with no face of its own. Up to eight rows of a
+// value and two text lines, in the new type and with no icons, in a vertical scroller.
 class GenericView : public PageView {
  public:
   static const int MAX_ROWS = 8;
 
   GenericView(lv_obj_t *parent, const std::string &id) : PageView(parent, id, 'g') {
     build_header_("");
-    list_ = mk_obj(root_, 0, 56, 480, 378);
+    list_ = mk_obj(root_, 0, LIST_Y, 480, LIST_BOTTOM - LIST_Y);
     lv_obj_add_flag(list_, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(list_, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_scroll_dir(list_, LV_DIR_VER);
@@ -1355,16 +1848,15 @@ class GenericView : public PageView {
 
   void apply(const Page &pg) override {
     set_title_(pg.title);
-    for (int i = 0; i < (int) rows_.size(); i++) set_hidden(rows_[i].box, true);
+    for (auto &r : rows_) set_hidden(r.box, true);
     int n = (int) pg.grows.size();
     if (n > MAX_ROWS) n = MAX_ROWS;
     for (int i = 0; i < n; i++) {
       const GenericRow &d = pg.grows[i];
       Row &r = ensure_row_(i);
-      lv_label_set_text(r.icon, icon_glyph(d.icon));
-      label_text(r.value, d.value);
-      label_text(r.a, d.a);
-      label_text(r.b, d.b);
+      place_(r.value, d.value);
+      place_(r.a, d.a);
+      place_(r.b, d.b);
       set_hidden(r.box, false);
     }
     set_stamp_(pg.asof, pg.stale);
@@ -1373,28 +1865,31 @@ class GenericView : public PageView {
   void tick(esphome::ESPTime now) override { tick_header_(now); }
 
  private:
+  static const int LIST_Y = 68, LIST_BOTTOM = 464, ROW_W = 432, ROW_H = 60, GAP = 8, PAD = 16;
+  static const int VALUE_W = 64;
+
   struct Row {
-    lv_obj_t *box = nullptr, *icon = nullptr, *value = nullptr, *a = nullptr, *b = nullptr;
+    lv_obj_t *box = nullptr, *value = nullptr, *a = nullptr, *b = nullptr;
   };
   Row &ensure_row_(int i) {
     while ((int) rows_.size() <= i) {
-      int y = 4 + 58 * (int) rows_.size();  // 52 tall with a 6 px gap, first row at page y 60
       Row r;
-      r.box = mk_panel(list_, 14, y, 452, 52, T_CARD, 16);
+      r.box = mk_panel(list_, margin_, (ROW_H + GAP) * (int) rows_.size(), ROW_W, ROW_H, T_CARD, 16);
       set_hidden(r.box, true);
-      r.icon = mk_label(r.box, 0, 0, 60, 0, F(g_fonts.icon), T_CHALK70);
-      lv_obj_set_style_text_align(r.icon, LV_TEXT_ALIGN_CENTER, 0);
-      lv_obj_align(r.icon, LV_ALIGN_LEFT_MID, 10, 0);
-      r.value = mk_label(r.box, 0, 0, 90, 0, F(g_fonts.sans600_20), T_CHALK);
-      lv_obj_align(r.value, LV_ALIGN_LEFT_MID, 78, 0);
-      r.a = mk_label(r.box, 176, 4, 262, 24, F(g_fonts.sans500_18), T_CHALK);
+      r.value = mk_label(r.box, PAD, 18, VALUE_W, 26, F(g_fonts.sans600_20), T_CHALK);
+      lv_label_set_long_mode(r.value, LV_LABEL_LONG_MODE_DOTS);
+      r.a = mk_label(r.box, PAD + VALUE_W + 14, 10, 260, 24, F(g_fonts.sans500_18), T_TITLE2);
       lv_label_set_long_mode(r.a, LV_LABEL_LONG_MODE_DOTS);
-      r.b = mk_label(r.box, 176, 28, 262, 20, F(g_fonts.mono15), T_CHALK70);
+      r.b = mk_label(r.box, PAD + VALUE_W + 14, 34, 260, 20, F(g_fonts.mono15), T_CHALK70);
       tracked(r.b, 1);
       lv_label_set_long_mode(r.b, LV_LABEL_LONG_MODE_DOTS);
       rows_.push_back(r);
     }
     return rows_[i];
+  }
+  static void place_(lv_obj_t *o, const std::string &text) {
+    lv_label_set_text(o, text.c_str());
+    set_hidden(o, text.empty());
   }
   static void touch_cb_(lv_event_t *e) { emit("TOUCH"); }
 
@@ -1469,7 +1964,10 @@ class PageHost {
       if (next.size() >= 1 + MAX_CONTENT) break;
       std::unique_ptr<PageView> v;
       for (size_t i = 1; i < views_.size(); i++) {
-        if (views_[i] && views_[i]->id() == pg.id && views_[i]->type() == pg.type) {
+        // The module is part of the test, not only the id and the type: a generic page that
+        // changes module is a different face and has to be built again.
+        if (views_[i] && views_[i]->id() == pg.id && views_[i]->type() == pg.type &&
+            views_[i]->module() == pg.module) {
           v = std::move(views_[i]);
           break;
         }
@@ -1647,10 +2145,22 @@ class PageHost {
  private:
   static constexpr size_t MAX_CONTENT = 8, MAX_CLOCK_EVENTS = 24;
 
+  // The face a page gets. Three of them are generic pages as far as the document is concerned,
+  // which is why the module decides between them and why it is remembered on the view.
   std::unique_ptr<PageView> make_view_(const Page &pg) {
-    if (pg.type == 'b') return std::unique_ptr<PageView>(new BoardView(host_, pg.id));
-    if (pg.type == 'a') return std::unique_ptr<PageView>(new AgendaView(host_, pg.id));
-    return std::unique_ptr<PageView>(new GenericView(host_, pg.id));
+    std::unique_ptr<PageView> v;
+    if (pg.type == 'b')
+      v.reset(new BoardView(host_, pg.id));
+    else if (pg.type == 'a')
+      v.reset(new AgendaView(host_, pg.id));
+    else if (pg.module == "weather")
+      v.reset(new SkyView(host_, pg.id));
+    else if (pg.module == "reminders")
+      v.reset(new ListView(host_, pg.id));
+    else
+      v.reset(new GenericView(host_, pg.id));
+    v->set_module(pg.module);
+    return v;
   }
 
   // Positions, stacking order and the page indicator after any change to the page list.
@@ -1720,32 +2230,7 @@ class PageHost {
     // A backend older than the weather face sends no `temp`, so the first row's big value stands
     // in for it, but only when it really is a number: `v` may be a day count or anything else.
     if (weather->grows.empty()) return;
-    const std::string &v = weather->grows[0].value;
-    size_t i = (!v.empty() && v[0] == '-') ? 1 : 0;
-    if (i >= v.size()) return;
-    for (; i < v.size(); i++)
-      if (v[i] < '0' || v[i] > '9') return;
-    temp_ = v + "\xC2\xB0";
-  }
-
-  // "YYYYMMDD" a day later. Midday, so no daylight-saving shift can move the date.
-  static std::string day_after(const std::string &ymd) {
-    if (ymd.size() != 8) return "";
-    int n[8];
-    for (int i = 0; i < 8; i++) {
-      if (ymd[i] < '0' || ymd[i] > '9') return "";
-      n[i] = ymd[i] - '0';
-    }
-    struct tm t = {};
-    t.tm_year = n[0] * 1000 + n[1] * 100 + n[2] * 10 + n[3] - 1900;
-    t.tm_mon = n[4] * 10 + n[5] - 1;
-    t.tm_mday = n[6] * 10 + n[7] + 1;
-    t.tm_hour = 12;
-    t.tm_isdst = -1;
-    if (mktime(&t) == (time_t) -1) return "";
-    char buf[12];
-    strftime(buf, sizeof buf, "%Y%m%d", &t);
-    return buf;
+    if (is_number(weather->grows[0].value)) temp_ = weather->grows[0].value + "\xC2\xB0";
   }
 
   // Today's next timed event, else today's first all-day one, else tomorrow's first. Empty when

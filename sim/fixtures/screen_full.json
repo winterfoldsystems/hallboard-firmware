@@ -15,11 +15,11 @@
        {"t": "09:26", "d": "London Waterloo", "p": "2", "s": "On time . 10 coaches . SWR", "c": "G", "e": "", "id": "svc_5"}
      ],
      "short": "Farncombe"},
-    {"type": "agenda", "id": "dm_000002", "cal": "Household", "asof": 1789716600, "stale": false,
+    {"type": "agenda", "id": "dm_000002", "cal": "Household", "asof": 1789717080, "stale": false,
      "e": [
        {"d": "20260918", "w": "Fri 18 Sept", "t": "", "u": "", "s": "Bin day", "l": "", "a": 1},
        {"d": "20260918", "w": "Fri 18 Sept", "t": "08:00", "u": "08:30", "s": "Early call", "l": "", "a": 0},
-       {"d": "20260918", "w": "Fri 18 Sept", "t": "09:30", "u": "10:15", "s": "Standup", "l": "", "a": 0},
+       {"d": "20260918", "w": "Fri 18 Sept", "t": "09:30", "u": "10:15", "s": "Standup", "l": "Video call", "a": 0},
        {"d": "20260918", "w": "Fri 18 Sept", "t": "16:15", "u": "17:00", "s": "Dentist", "l": "High St", "a": 0},
        {"d": "20260919", "w": "Sat 19 Sept", "t": "", "u": "", "s": "Dad's birthday", "l": "", "a": 1},
        {"d": "20260919", "w": "Sat 19 Sept", "t": "10:00", "u": "12:00", "s": "Swimming", "l": "Leisure Centre", "a": 0},
@@ -27,7 +27,7 @@
        {"d": "20260921", "w": "Mon 21 Sept", "t": "09:15", "u": "17:00", "s": "Offsite", "l": "Reading", "a": 0},
        {"d": "20260923", "w": "Wed 23 Sept", "t": "", "u": "", "s": "Passport renewal", "l": "", "a": 1}
      ]},
-    {"type": "generic", "id": "dm_000003", "module": "weather", "title": "Weather", "asof": 1789716600, "stale": false,
+    {"type": "generic", "id": "dm_000003", "module": "weather", "title": "Weather", "asof": 1789717080, "stale": false,
      "rows": [
        {"i": "partly", "v": "14", "a": "Now", "b": "Cloudy . high 19 . low 11"},
        {"i": "cloud", "v": "15", "a": "10:00", "b": "Cloudy"},
@@ -38,20 +38,19 @@
        {"i": "sun", "v": "21", "a": "Sat", "b": "Sunny . high 21 . low 12"}
      ],
      "place": "Godalming", "temp": "14", "feels": "12",
-     "head": "Cloudy, then rain", "sent": "Take the umbrella, rain from about one.",
+     "head": "Cloudy, then rain", "sent": "Take the umbrella, rain from about four.",
      "hours": [
-       {"h": "10", "t": "15", "r": 20},
-       {"h": "12", "t": "17", "r": 45},
-       {"h": "14", "t": "18", "r": 70},
-       {"h": "16", "t": "18", "r": 65},
-       {"h": "18", "t": "16", "r": 30},
-       {"h": "20", "t": "14", "r": 15}
+       {"h": "10", "t": "15", "r": 10},
+       {"h": "12", "t": "17", "r": 20},
+       {"h": "14", "t": "18", "r": 35},
+       {"h": "16", "t": "18", "r": 60},
+       {"h": "18", "t": "16", "r": 80},
+       {"h": "20", "t": "14", "r": 40}
      ]},
-    {"type": "generic", "id": "dm_000004", "module": "reminders", "title": "To-do", "asof": 1789716600, "stale": false,
+    {"type": "generic", "id": "dm_000004", "module": "reminders", "title": "To-do", "asof": 1789717080, "stale": false,
      "rows": [
        {"i": "bell", "v": "0", "a": "Put the bins out", "b": "today"},
        {"i": "bell", "v": "1", "a": "Book the boiler service", "b": "1 day"},
-       {"i": "bell", "v": "4", "a": "Renew the parking permit", "b": "4 days"},
        {"i": "bell", "v": "0", "a": "Return the library books", "b": "overdue"},
        {"i": "bell", "v": "", "a": "Milk", "b": ""}
      ]}

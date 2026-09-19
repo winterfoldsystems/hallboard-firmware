@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "gen": 1789717080,
+  "poll": 60,
+  "tz": "Europe/London",
+  "tzp": "GMT0BST,M3.5.0/1,M10.5.0",
+  "pages": [
+    {"type": "generic", "id": "dm_000041", "module": "reminders", "title": "To-do", "asof": 1789716600, "stale": false,
+     "rows": []}
+  ],
+  "settings": {"brightness": 90, "tier": "commuter", "name": "Hallway"}
+}

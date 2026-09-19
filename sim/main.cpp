@@ -277,7 +277,11 @@ const Scenario SCENARIOS[] = {
     {"day", [](Sim &s) { booted(s, "screen_full.json", 2); }},
     {"day-empty", [](Sim &s) { booted(s, "agenda_empty.json", 1); }},
     {"weather", [](Sim &s) { booted(s, "screen_full.json", 3); }},
+    // A weather page from a backend older than the face, or one cached before it: rows and
+    // nothing else, so the hero falls back to the first row and the strip has nothing to draw.
+    {"weather-rows-only", [](Sim &s) { booted(s, "weather_rows_only.json", 1); }},
     {"reminders", [](Sim &s) { booted(s, "screen_full.json", 4); }},
+    {"reminders-empty", [](Sim &s) { booted(s, "reminders_empty.json", 1); }},
     {"pair",
      [](Sim &s) {
        s.attach();
