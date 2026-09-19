@@ -1641,19 +1641,19 @@ class SkyView : public PageView {
   // and the block between them is centred on what is left.
   static const int HEAD_BOTTOM = 44, TEXT_W = 448, GAP = 10;
   // The strip card, from SkyFace: six columns 60 wide with 8 between them inside 24 of padding,
-  // and a bar area of 68. The six columns measure 400 on a 68 pitch, which is what centres them
+  // and a bar area of 60. The six columns measure 400 on a 68 pitch, which is what centres them
   // in the 448 card. The card is taller than the design's 128 because a rasterised 16 px label
   // and a 14 px one need more room than the mock's line boxes did.
-  static const int COLS = 6, COL_W = 60, COL_PITCH = 68, CARD_PAD = 24, BAR_MAX = 68, BAR_MIN = 24;
+  static const int COLS = 6, COL_W = 60, COL_PITCH = 68, CARD_PAD = 24, BAR_MAX = 60, BAR_MIN = 22;
 
   struct Col {
-    lv_obj_t *root = nullptr, *temp = nullptr, *bar = nullptr, *hour = nullptr;
+    lv_obj_t *root = nullptr, *temp = nullptr, *bar = nullptr, *hour = nullptr, *rain = nullptr;
   };
 
   void build_strip_() {
     int th = lv_font_get_line_height(F(g_fonts.sans500_16));
     int hh = lv_font_get_line_height(F(g_fonts.mono14));
-    int inner = th + 6 + BAR_MAX + 6 + hh;
+    int inner = th + 6 + BAR_MAX + 6 + hh + 2 + hh;
     card_h_ = inner + 2 * CARD_PAD;
     card_y_ = 480 - margin_ - card_h_;
     card_ = mk_panel(root_, margin_, card_y_, TEXT_W, card_h_, T_CARD, 16);
@@ -1667,6 +1667,8 @@ class SkyView : public PageView {
       c.bar = mk_panel(c.root, 0, th + 6, COL_W, BAR_MAX, T_WEATHER, 4);
       c.hour = mk_label(c.root, 0, th + 12 + BAR_MAX, COL_W, hh, F(g_fonts.mono14), T_HOUR, "");
       lv_obj_set_style_text_align(c.hour, LV_TEXT_ALIGN_CENTER, 0);
+      c.rain = mk_label(c.root, 0, th + 12 + BAR_MAX + hh + 2, COL_W, hh, F(g_fonts.mono14), T_HOUR, "");
+      lv_obj_set_style_text_align(c.rain, LV_TEXT_ALIGN_CENTER, 0);
       set_hidden(c.root, true);
     }
     bar_top_ = th + 6;
@@ -1677,9 +1679,9 @@ class SkyView : public PageView {
   // sentence is about. With nothing above half, the next hour is the one to read. A bar's height
   // is the temperature, because the number over it is: the warmest of the six slots is the full
   // height and the coldest about a third of it, so the strip reads as a day warming and cooling,
-  // and each number rides on top of its bar. The chance of rain is the bar's brightness, a dry
-  // hour a third of the hue and a certain one all of it, which is how "rain from about four"
-  // shows in the strip.
+  // and each number rides on top of its bar. The brightness says the same thing again, the
+  // warmest hour the full hue and the coldest a third of it. The chance of rain is a small
+  // percentage under the hour, in the weather hue from half a chance up.
   void fill_strip_(const std::vector<HourSlot> &hours) {
     int focus = 0, lo = 0, hi = 0;
     bool any = false, found = false;
@@ -1713,8 +1715,12 @@ class SkyView : public PageView {
       lv_obj_set_pos(c.bar, 0, bar_top_ + BAR_MAX - h);
       lv_obj_set_height(c.bar, h);
       lv_obj_set_y(c.temp, bar_top_ + BAR_MAX - h - 6 - temp_h_);
+      int opa = 255;
+      if (hi > lo && !s.t.empty()) opa = 85 + (255 - 85) * (atoi(s.t.c_str()) - lo) / (hi - lo);
+      lv_obj_set_style_opa(c.bar, (lv_opa_t) opa, 0);
       int r = s.r < 0 ? 0 : s.r > 100 ? 100 : s.r;
-      lv_obj_set_style_opa(c.bar, (lv_opa_t) (85 + (255 - 85) * r / 100), 0);
+      label_text(c.rain, std::to_string(r) + "%");
+      set_tok(c.rain, r >= 50 ? T_WEATHER : T_HOUR);
       label_text(c.hour, s.h);
       set_tok(c.hour, i == focus ? T_TIME2 : T_HOUR);
       set_hidden(c.root, false);
