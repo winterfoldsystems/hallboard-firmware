@@ -1270,13 +1270,13 @@ class BoardView : public PageView {
   // a 14 px gap, then the destination over its status, with the platform right-aligned at the
   // far end. The time and the platform both sit on the destination's line rather than the row's
   // middle: the three are read together, and it leaves the status the full width, because the
-  // composed status strings are long and the design's own are not. The platform is the largest
-  // thing in the row, since it is the one read from the far side of the hall on the way out.
+  // composed status strings are long and the design's own are not. The platform is set as the
+  // destination is, size and weight, so the line reads as one.
   void build_row_(Row &r, int i) {
     int h = row_h(i), y = row_y(i);
     bool first = i == 0;
     // The destination and its status are centred in the row's height.
-    const int dest_h = first ? 30 : 28, status_h = 24, plat_h = 36;
+    const int dest_h = first ? 30 : 28, status_h = 24;
     int pad = (h - (dest_h + 2 + status_h)) / 2;
     r.box = first ? mk_panel(root_, ROW_X, y, ROW_W, h, T_RAISED, 16)
                   : mk_obj(root_, ROW_X, y, ROW_W, h);
@@ -1298,8 +1298,9 @@ class BoardView : public PageView {
     r.status = mk_label(r.box, text_x, pad + dest_h + 2, ROW_W - rpad - text_x, status_h,
                         F(g_fonts.sans500_18), T_CHALK70);
     lv_label_set_long_mode(r.status, LV_LABEL_LONG_MODE_DOTS);
-    r.plat = mk_label(r.box, plat_x, pad + (dest_h - plat_h) / 2, plat_w, plat_h,
-                      F(g_fonts.sans600_30), first ? T_CHALK : T_CHALK70);
+    r.plat = mk_label(r.box, plat_x, pad, plat_w, dest_h,
+                      F(first ? g_fonts.sans600_24 : g_fonts.sans500_22),
+                      first ? T_CHALK : T_CHALK70);
     lv_obj_set_style_text_align(r.plat, LV_TEXT_ALIGN_RIGHT, 0);
     set_hidden(r.box, true);
   }
