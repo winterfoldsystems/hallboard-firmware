@@ -24,7 +24,7 @@ lvgl:
         # uses id(...)->get_lv_font() and lv_qrcode_create directly. One label per font id, all
         # hidden, none ever drawn. Nothing in this file draws with a built-in font any more, so
         # every font a page can use is anchored here.
-        - label: {id: anchor_fig600_132, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig600_132, hidden: true}
+        - label: {id: anchor_fig600_168, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig600_168, hidden: true}
         - label: {id: anchor_fig600_88, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig600_88, hidden: true}
         - label: {id: anchor_fig600_30, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig600_30, hidden: true}
         - label: {id: anchor_fig600_24, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig600_24, hidden: true}
@@ -597,10 +597,10 @@ lvgl:
 # Every entry has an explicit glyph list. The text sizes share one: printable ASCII plus the
 # degree sign, the middle dot the stamps separate with, both dashes and an ellipsis.
 font:
-  # The clock face. Digits and a colon and nothing else at 132 px.
+  # The clock face. Digits and a colon and nothing else at 168 px.
   - file: "gfonts://Figtree@600"
-    id: fig600_132
-    size: 132
+    id: fig600_168
+    size: 168
     bpp: 4
     glyphs: ["0123456789:"]
   # The temperature hero on the weather face: digits, the degree sign and a minus.

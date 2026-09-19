@@ -118,7 +118,7 @@ inline int hhmm_to_minutes(const std::string &s) {
 // Set once on boot from the `font:` entries in ui.yaml (hidden anchor labels there are what
 // compiles each one in); the host simulator fills the same members from TTFs.
 struct FontSet {
-  const lv_font_t *clock132 = nullptr;   // Figtree 600, the clock face
+  const lv_font_t *clock168 = nullptr;   // Figtree 600, the clock face
   const lv_font_t *hero88 = nullptr;     // Figtree 600, the temperature hero
   const lv_font_t *sans600_30 = nullptr;
   const lv_font_t *sans600_24 = nullptr;
@@ -636,8 +636,8 @@ class PageView {
 // Geometry, from ClockFace in the design system with 16 px of padding all round: a 28 px strip
 // at the top and a foot row that ends on the bottom margin, under the page dots when those show.
 // The hairline sits at 424, the foot row runs 440 to 464, and the middle block is centred between
-// the strip (ending at 44) and the hairline. The numerals stand 102 px tall and start 20 px below
-// their label's top, which is what puts the clock label at 163. The line in the middle of the
+// the strip (ending at 44) and the hairline. The numerals stand 121 px tall at 168 px and start
+// 39 px below their label's top, which is what puts the clock label at 135. The line in the middle of the
 // face is only ever the wait for SNTP, and the numerals are empty while it shows.
 class ClockView : public PageView {
  public:
@@ -648,9 +648,11 @@ class ClockView : public PageView {
 
     // The clock font holds digits and a colon and nothing else, so the label starts empty rather
     // than showing "--:--": four missing glyphs would draw as four boxes.
-    time_ = mk_label(root_, 0, 163, 480, 0, F(g_fonts.clock132), T_CHALK, "");
+    // The tracking comes off after the last figure too, which pulls a centred line 5 px to the
+    // left of centre; the label starts 10 px in to put it back.
+    time_ = mk_label(root_, 10, 135, 470, 0, F(g_fonts.clock168), T_CHALK, "");
     lv_obj_set_style_text_align(time_, LV_TEXT_ALIGN_CENTER, 0);
-    tracked(time_, -8);
+    tracked(time_, -10);
     waiting_ = mk_label(root_, 16, 220, 448, 28, F(g_fonts.sans500_20), T_CHALK70, copy::CLOCK_WAITING);
     lv_obj_set_style_text_align(waiting_, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(waiting_, LV_LABEL_LONG_MODE_DOTS);

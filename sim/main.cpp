@@ -54,7 +54,7 @@ const char *FIG_400 = "fonts/Figtree-Regular.ttf";
 const char *FIG_700 = "fonts/Figtree-Bold.ttf";
 const char *MONO_400 = "fonts/IBMPlexMono-Regular.ttf";
 const FontSpec FONTS[] = {
-    {&hb::FontSet::clock132, FIG_600, 132},
+    {&hb::FontSet::clock168, FIG_600, 168},
     {&hb::FontSet::hero88, FIG_600, 88},
     {&hb::FontSet::sans600_30, FIG_600, 30},
     {&hb::FontSet::sans600_24, FIG_600, 24},
