@@ -1450,9 +1450,13 @@ class AgendaView : public PageView {
 
  private:
   // The face's geometry, from DayFace and AgendaRow: rows 448 wide inside a 16 px margin, 16 of
-  // padding in the raised one and 12/16 in the rest, a 52 px time gutter and a 14 px gap after it.
-  static const int LIST_Y = 60, LIST_BOTTOM = 464, ROW_W = 448, ROW_H = 60, RAISED_H = 80;
-  static const int GAP = 8, HEAD_H = 38, HEAD_GAP = 8, PAD = 16, TIME_W = 56, TEXT_X = 86;
+  // padding in the raised one and 12/16 in the rest, and the board's 72 px time gutter with a
+  // 12 px gap after it.
+  static const int LIST_Y = 60, LIST_BOTTOM = 464, ROW_W = 448, ROW_H = 60, RAISED_H = 86;
+  static const int GAP = 8, HEAD_H = 38, HEAD_GAP = 8, PAD = 16, TIME_W = 72, TEXT_X = 100;
+  // The type is the board's: a line 30 tall on the raised row and 28 on the rest, with the time
+  // set as the title is, and a 24 px second line in the raised row under a 2 px gap.
+  static const int LINE_H = 28, RAISED_LINE_H = 30, SUB_H = 24;
   static const int DUR_W = 84;
 
   struct Card {
@@ -1484,31 +1488,36 @@ class AgendaView : public PageView {
     set_fill(c.box, T_RAISED, raised, 16);
     set_hidden(c.box, false);
     set_hidden(c.rule, hide_rule);
-    int time_y = ((raised ? RAISED_H : ROW_H) - 21) / 2;
     if (raised) {
       // The time keeps the gutter it has in a resting row so the column runs straight down the
       // face, and the second line says how long there is rather than repeating the end time.
-      place_label_(c.time, PAD, PAD + 4, TIME_W, e.all_day ? "" : e.t);
-      set_tok(c.time, T_TIME2);
-      place_label_(c.title, TEXT_X, PAD, ROW_W - TEXT_X - PAD, e.s);
-      lv_obj_set_style_text_font(c.title, F(g_fonts.sans600_20), 0);
+      int top = (RAISED_H - (RAISED_LINE_H + 2 + SUB_H)) / 2;
+      place_label_(c.time, PAD, top, TIME_W, e.all_day ? "" : e.t);
+      lv_obj_set_style_text_font(c.time, F(g_fonts.sans600_24), 0);
+      set_tok(c.time, T_CHALK);
+      place_label_(c.title, TEXT_X, top, ROW_W - TEXT_X - PAD, e.s);
+      lv_obj_set_style_text_font(c.title, F(g_fonts.sans600_24), 0);
       set_tok(c.title, T_CHALK);
       std::string sub = e.all_day ? std::string(copy::ALL_DAY) : starts_in(e.t);
       if (!e.l.empty()) sub += (sub.empty() ? "" : " \xC2\xB7 ") + e.l;
-      place_label_(c.meta, TEXT_X, PAD + 28, ROW_W - TEXT_X - PAD, sub);
-      lv_obj_set_style_text_font(c.meta, F(g_fonts.sans500_16), 0);
+      place_label_(c.meta, TEXT_X, top + RAISED_LINE_H + 2, ROW_W - TEXT_X - PAD, sub);
+      lv_obj_set_style_text_font(c.meta, F(g_fonts.sans500_18), 0);
       lv_obj_set_style_text_align(c.meta, LV_TEXT_ALIGN_LEFT, 0);
       set_tok(c.meta, T_CHALK70);
       return;
     }
-    place_label_(c.time, PAD, time_y, TIME_W, e.all_day ? "" : e.t);
+    int line_y = (ROW_H - LINE_H) / 2;
+    place_label_(c.time, PAD, line_y, TIME_W, e.all_day ? "" : e.t);
+    lv_obj_set_style_text_font(c.time, F(g_fonts.sans500_22), 0);
     set_tok(c.time, T_HOUR);
-    place_label_(c.title, TEXT_X, time_y - 2, ROW_W - TEXT_X - PAD - DUR_W - 8, e.s);
-    lv_obj_set_style_text_font(c.title, F(g_fonts.sans500_18), 0);
+    place_label_(c.title, TEXT_X, line_y, ROW_W - TEXT_X - PAD - DUR_W - 8, e.s);
+    lv_obj_set_style_text_font(c.title, F(g_fonts.sans500_22), 0);
     set_tok(c.title, T_TITLE2);
-    place_label_(c.meta, ROW_W - PAD - DUR_W, time_y, DUR_W,
+    // The length sits on the title's line in the second line's type, a little lower so the two
+    // share a baseline.
+    place_label_(c.meta, ROW_W - PAD - DUR_W, line_y + 4, DUR_W,
                  e.all_day ? std::string(copy::ALL_DAY) : duration_text(e.t, e.u));
-    lv_obj_set_style_text_font(c.meta, F(g_fonts.mono15), 0);
+    lv_obj_set_style_text_font(c.meta, F(g_fonts.sans500_18), 0);
     lv_obj_set_style_text_align(c.meta, LV_TEXT_ALIGN_RIGHT, 0);
     set_tok(c.meta, T_CHALK50);
   }
@@ -1519,10 +1528,10 @@ class AgendaView : public PageView {
       c.box = mk_obj(list_, margin_, 0, ROW_W, ROW_H);
       set_hidden(c.box, true);
       c.rule = mk_rule(c.box, 0, 0, ROW_W, T_LINE);
-      c.time = mk_label(c.box, PAD, 0, TIME_W, 22, F(g_fonts.mono16), T_HOUR);
-      c.title = mk_label(c.box, TEXT_X, 0, 200, 26, F(g_fonts.sans500_18), T_TITLE2);
+      c.time = mk_label(c.box, PAD, 0, TIME_W, RAISED_LINE_H, F(g_fonts.sans500_22), T_HOUR);
+      c.title = mk_label(c.box, TEXT_X, 0, 200, RAISED_LINE_H, F(g_fonts.sans500_22), T_TITLE2);
       lv_label_set_long_mode(c.title, LV_LABEL_LONG_MODE_DOTS);
-      c.meta = mk_label(c.box, TEXT_X, 0, 200, 22, F(g_fonts.mono15), T_CHALK50);
+      c.meta = mk_label(c.box, TEXT_X, 0, 200, SUB_H, F(g_fonts.sans500_18), T_CHALK50);
       lv_label_set_long_mode(c.meta, LV_LABEL_LONG_MODE_DOTS);
       cards_.push_back(c);
     }
