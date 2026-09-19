@@ -35,7 +35,6 @@ esphome:
     - hb_ui.h
     - hb_parse.h
     - trainboard_logic.h
-    - stations.h
   on_boot:
     priority: -100
     then:
@@ -50,8 +49,8 @@ esphome:
             ESP_LOGI("hb", "generated a new device secret");
           }
           if (id(cur_board) < 0) id(cur_board) = 0;
-          // Fonts the runtime pages draw with, the agenda's saved layout, and the way a widget
-          // posts an event back to this script. Then build the carousel, clock page first.
+          // Fonts the runtime pages draw with, and the way a widget posts an event back to this
+          // script. Then build the carousel, clock page first.
           hb::g_fonts.clock132 = id(fig600_132)->get_lv_font();
           hb::g_fonts.hero88 = id(fig600_88)->get_lv_font();
           hb::g_fonts.sans600_30 = id(fig600_30)->get_lv_font();
@@ -68,8 +67,7 @@ esphome:
           hb::g_fonts.mono15 = id(mono400_15)->get_lv_font();
           hb::g_fonts.mono14 = id(mono400_14)->get_lv_font();
           hb::g_fonts.icon = id(icon_font)->get_lv_font();
-          hb::g_agenda_expanded = id(cal_expanded);
-          hb::g_event = [](const std::string &msg) { id(ev).execute(msg); };
+          hb::g_event =[](const std::string &msg) { id(ev).execute(msg); };
           hb::g_host.attach(id(content_page)->obj, "${fw_version}");
           // The backlight is off from power-on (hardware.yaml), because until LVGL has drawn once
           // the RGB panel scans whatever happened to be in PSRAM. Draw the black boot overlay
@@ -128,8 +126,8 @@ esp32:
   framework:
     advanced:
       enable_ota_rollback: true
-      # Everything the board keeps between boots lives in NVS: the device secret, the claim, the
-      # saved Wi-Fi network, the station choices. Encrypt it. The two NVS keys are derived at
+      # Everything the board keeps between boots lives in NVS: the device secret, the claim and
+      # the saved Wi-Fi network. Encrypt it. The two NVS keys are derived at
       # runtime by the HMAC peripheral from a 256-bit key held in eFuse key block 0, which the
       # chip fills with random bytes on the first boot of an image built this way and then
       # read-protects. No key material is in the image, so every unit (and every bring-your-own
@@ -182,7 +180,7 @@ wifi:
         hb::g_host.set_network(name);
         hb::g_host.set_status(id(claimed) ? "Wi-Fi connected, fetching the board..."
                                           : "Wi-Fi connected, pairing...");
-        if (id(lv).get_current_page() == 3) id(lv).show_page(0, LV_SCR_LOAD_ANIM_NONE, 0);
+        if (id(lv).get_current_page() == 2) id(lv).show_page(0, LV_SCR_LOAD_ANIM_NONE, 0);
         // Pair (or poll the screen) on the next scheduler tick.
         id(backoff_ms) = 0;
         id(next_poll_at) = millis();
@@ -229,24 +227,13 @@ globals:
   - {id: outage_since, type: std::string}
   # The POSIX TZ string last handed to the clock, so a document only changes it when it changes.
   - {id: applied_tz, type: std::string}
-  # Station choice per board ordinal (0 and 1 are the first and second board pages in display
-  # order). Kept on the device so a header reads correctly before the new document arrives.
-  - {id: board_from, type: 'int[2]', restore_value: true, initial_value: '{4755, 16814}'}   # FNC, WAT
-  - {id: board_to,   type: 'int[2]', restore_value: true, initial_value: '{16814, 4755}'}   # WAT, FNC
-  - {id: board_mode, type: 'int[2]', restore_value: true, initial_value: '{0, 1}'}   # 0 departures, 1 arrivals
   - {id: cur_board, type: int, restore_value: true, initial_value: '0'}   # carousel index, restored across boots
   - {id: page_restored, type: bool, initial_value: 'false'}
   - {id: detail_until, type: uint32_t, initial_value: '0'}
   - {id: scan_at, type: uint32_t, initial_value: '0'}
   - {id: pending_detail, type: std::string}
-  - {id: pending_settings, type: std::string}
   - {id: pw_ssid, type: std::string}
   - {id: net_names, type: 'std::vector<std::string>'}
-  - {id: set_step, type: int, initial_value: '0'}
-  - {id: set_board, type: int, initial_value: '0'}   # the board ordinal the picker is editing
-  - {id: set_from, type: int, initial_value: '0'}
-  - {id: matches, type: 'std::vector<int>'}
-  - {id: cal_expanded, type: bool, restore_value: true, initial_value: 'false'}   # agenda: compact / two-line
   # Display settings from the document (docs/screen-document.md).
   - {id: day_brightness, type: int, initial_value: '100'}
   - {id: night_on, type: bool, initial_value: 'false'}
@@ -284,49 +271,6 @@ script:
     then:
       - lambda: |-
           auto starts = [&](const char* p) { return msg.rfind(p, 0) == 0; };
-          lv_obj_t* mb[] = {id(match0), id(match1), id(match2), id(match3)};
-          lv_obj_t* ml[] = {id(match0_lbl), id(match1_lbl), id(match2_lbl), id(match3_lbl)};
-          auto open_settings = [&](const char* title) {
-            lv_textarea_set_text(id(search_ta), "");
-            for (auto* b : mb) lv_obj_add_flag(b, LV_OBJ_FLAG_HIDDEN);
-            lv_label_set_text(id(set_title), title);
-            // the Departures/Arrivals toggle is only offered while picking the main station
-            bool step1 = id(set_step) == 1;
-            lv_obj_set_width(id(set_title), step1 ? 132 : 250);
-            if (step1) lv_obj_remove_flag(id(mode_btn), LV_OBJ_FLAG_HIDDEN); else lv_obj_add_flag(id(mode_btn), LV_OBJ_FLAG_HIDDEN);
-            lv_label_set_text(id(mode_lbl), id(board_mode)[id(set_board)] ? "Arrivals" : "Departures");
-            id(lv).show_page(2, LV_SCR_LOAD_ANIM_NONE, 0);
-          };
-          auto step1_title = [&]() { return id(board_mode)[id(set_board)] ? "Arrivals at" : "From station"; };
-          // The only place the station choice changes. The packed codes stay on the device so the
-          // header still reads correctly offline; the backend is told with PATCH /v1/device/settings,
-          // queued here and submitted by poll_fetcher as soon as the fetch task is free.
-          auto finish = [&](int to_code) {
-            int b = id(set_board);
-            id(board_from)[b] = id(set_from);
-            id(board_to)[b] = to_code;
-            id(set_step) = 0;
-            std::string from = tb::unpack_code(id(set_from));
-            std::string to = to_code ? tb::unpack_code(to_code) : "";
-            bool arr = id(board_mode)[b] == 1;
-            std::string hdr = arr
-                ? tb::shorten(tb::station_name(from), 12) + " arrivals" + (to.empty() ? "" : " from " + tb::shorten(tb::station_name(to), 12))
-                : tb::shorten(tb::station_name(from), 14) + (to.empty() ? "" : "  to " + tb::shorten(tb::station_name(to), 14));
-            int idx = hb::g_host.board_index(b);
-            if (idx >= 0) {
-              auto* v = hb::g_host.view((size_t) idx);
-              if (v != nullptr && v->type() == 'b') static_cast<hb::BoardView*>(v)->set_pending(hdr);
-            }
-            ESP_LOGI("hb", "board %d set to %s -> %s", b + 1,
-                     from.c_str(), to.empty() ? "any" : to.c_str());
-            // Values are a 0/1 index, two A-Z codes and a fixed mode word: nothing needs escaping.
-            id(pending_settings) = std::string("{\"board\":") + std::to_string(b) +
-                                   ",\"from\":\"" + from + "\",\"to\":\"" + to + "\",\"mode\":\"" +
-                                   (arr ? "arr" : "dep") + "\"}";
-            id(lv).show_page(0, LV_SCR_LOAD_ANIM_NONE, 0);
-            if (idx >= 0) hb::g_host.show((size_t) idx, false);
-            id(next_poll_at) = millis() + 2000;   // fallback if the PATCH never lands
-          };
           // Tap to refresh, at most once every 15 seconds (docs/api-v1.md).
           auto manual_refresh = [&]() {
             if (id(last_manual_refresh) && millis() - id(last_manual_refresh) < 15000) return;
@@ -348,31 +292,14 @@ script:
 
           if (msg == "FACTORYRESET") {
             id(factory_reset).execute();
-          } else if (msg == "BUTTON" && hb::g_host.current_type() == 'a') {
-            // on the agenda the button toggles compact / expanded view
-            hb::g_agenda_expanded = !hb::g_agenda_expanded;
-            id(cal_expanded) = hb::g_agenda_expanded;
-            auto* av = hb::g_host.current_agenda();
-            if (av != nullptr) { av->render(); av->scroll_top(); }
           } else if (msg == "BUTTON") {
-            // The picker edits a pair of CRS stations, which is a rail board and nothing else: a
-            // tube or bus board is a TfL stop chosen in the portal and has no station to change.
-            // picker_ordinal answers -1 there, and on a document with no rail board at all, and
-            // then the button does nothing rather than editing some other page's station.
-            int ord = hb::g_host.picker_ordinal(hb::g_host.current());
-            if (ord < 0) return;
-            id(detail_until) = 0;
-            id(set_board) = ord;
-            id(set_step) = 1;
-            open_settings(step1_title());
-          } else if (msg == "MODE" && id(set_step) == 1) {
-            id(board_mode)[id(set_board)] = id(board_mode)[id(set_board)] ? 0 : 1;
-            lv_label_set_text(id(mode_lbl), id(board_mode)[id(set_board)] ? "Arrivals" : "Departures");
-            lv_label_set_text(id(set_title), step1_title());
+            // A short press changes nothing on the board: it only lifts the backlight for two
+            // minutes, which is how the board is read in a dark hall without touching the glass.
+            id(night_lift_until) = millis() + 120000;
+            id(apply_brightness).execute();
           } else if (msg == "BUTTONLONG" || msg == "WIFISCAN") {
             id(detail_until) = 0;
-            id(set_step) = 0;
-            id(lv).show_page(3, LV_SCR_LOAD_ANIM_NONE, 0);
+            id(lv).show_page(2, LV_SCR_LOAD_ANIM_NONE, 0);
             start_scan();
           } else if (starts("NET|")) {
             int n = atoi(msg.c_str() + 4);
@@ -380,7 +307,7 @@ script:
             id(pw_ssid) = id(net_names)[n];
             lv_label_set_text(id(wifi_pw_title), ("Password for " + id(pw_ssid)).c_str());
             lv_textarea_set_text(id(pw_ta), "");
-            id(lv).show_page(4, LV_SCR_LOAD_ANIM_NONE, 0);
+            id(lv).show_page(3, LV_SCR_LOAD_ANIM_NONE, 0);
           } else if (msg == "WIFICONNECT") {
             std::string pw = lv_textarea_get_text(id(pw_ta));
             ESP_LOGI("hb", "saving Wi-Fi credentials");
@@ -388,44 +315,16 @@ script:
             lv_textarea_set_text(id(pw_ta), "");
             lv_label_set_text(id(wifi_status), ("Connecting to " + id(pw_ssid) + "...").c_str());
             hb::g_host.set_status("Connecting to " + id(pw_ssid) + "...");
-            id(lv).show_page(3, LV_SCR_LOAD_ANIM_NONE, 0);
-          } else if (starts("Q|") && id(set_step)) {
-            id(matches) = tb::search_stations(msg.substr(2), 4);
-            for (int i = 0; i < 4; i++) {
-              if (i < (int) id(matches).size()) {
-                const auto& st = STATIONS[id(matches)[i]];
-                std::string t = std::string(st.name) + "  (" + st.code + ")";
-                lv_label_set_text(ml[i], t.c_str());
-                lv_obj_remove_flag(mb[i], LV_OBJ_FLAG_HIDDEN);
-              } else {
-                lv_obj_add_flag(mb[i], LV_OBJ_FLAG_HIDDEN);
-              }
-            }
-          } else if (starts("PICK|") && id(set_step)) {
-            int n = atoi(msg.c_str() + 5);
-            if (n < 0 || n >= (int) id(matches).size()) return;
-            const auto& st = STATIONS[id(matches)[n]];
-            int code = tb::pack_code(st.code);
-            if (id(set_step) == 1) {
-              id(set_from) = code;
-              id(set_step) = 2;
-              bool arr = id(board_mode)[id(set_board)];
-              open_settings(((arr ? "From (arrivals at " : "To (from ") + tb::shorten(st.name, 12) + ")").c_str());
-            } else {
-              finish(code);
-            }
-          } else if (msg == "ANY" && id(set_step) == 2) {
-            finish(0);
+            id(lv).show_page(2, LV_SCR_LOAD_ANIM_NONE, 0);
           } else if (msg == "CANCEL") {
-            id(set_step) = 0;
+            // Close on either Wi-Fi page. The typed password is cleared rather than left in the
+            // textarea for whoever walks past next.
             lv_textarea_set_text(id(pw_ta), "");
             id(lv).show_page(0, LV_SCR_LOAD_ANIM_NONE, 0);
-          } else if (msg == "TOUCH" && id(set_step)) {
-            // settings page: taps are handled by its own widgets
           } else if (msg == "TOUCH" && id(detail_until)) {
             id(detail_until) = 0;
             id(lv).show_page(0, LV_SCR_LOAD_ANIM_NONE, 0);
-          } else if (starts("SWIPE|") && !id(set_step)) {
+          } else if (starts("SWIPE|")) {
             // Only reached with HB_CAROUSEL 0: with the carousel, LVGL scrolls the pages itself.
             id(detail_until) = 0;
             hb::g_host.step(msg == "SWIPE|L" ? 1 : -1);
@@ -435,7 +334,7 @@ script:
             id(night_lift_until) = millis() + 120000;
             id(apply_brightness).execute();
             manual_refresh();
-          } else if (starts("LONG|") && !id(set_step)) {
+          } else if (starts("LONG|")) {
             auto* bv = hb::g_host.current_board();
             if (bv == nullptr) return;
             const std::string& uid = bv->uid_at(atoi(msg.c_str() + 5));
@@ -566,18 +465,9 @@ script:
   - id: poll_fetcher
     then:
       - lambda: |-
-          // Queued work, submitted as soon as the fetch task is free. Settings go first so a
-          // station change is registered before the next screen poll.
+          // Queued work, submitted as soon as the fetch task is free.
           if (!tb::g_fetcher.busy() && tb::secret_valid(id(device_secret)) && !id(fw_installing)) {
-            if (id(claimed) && !id(pending_settings).empty()) {
-              tb::Job j;
-              j.kind = tb::JOB_SETTINGS;
-              j.method = tb::M_PATCH;
-              j.url = "${backend_base}/v1/device/settings";
-              j.auth = std::string("Bearer ") + id(device_secret);
-              j.body = id(pending_settings);
-              if (tb::g_fetcher.submit(j)) id(pending_settings).clear();
-            } else if (id(claimed) && !id(pending_detail).empty()) {
+            if (id(claimed) && !id(pending_detail).empty()) {
               std::string sid = tb::url_token(id(pending_detail));
               if (sid.empty()) {
                 id(pending_detail).clear();
@@ -601,9 +491,9 @@ script:
               j.body = id(fw_result_body);
               if (tb::g_fetcher.submit(j)) id(fw_result_body).clear();
             } else if (wifi::global_wifi_component->is_connected() &&
-                       id(pending_settings).empty() && id(pending_detail).empty() && !id(detail_until)) {
-              // Firmware work never interrupts a settings PATCH or a detail fetch, and never runs
-              // with the network down.
+                       id(pending_detail).empty() && !id(detail_until)) {
+              // Firmware work never interrupts a detail fetch, and never runs with the network
+              // down.
               bool window = false;
               if (id(fw_force) || !id(claimed)) {
                 window = true;                       // forced, or unpaired and so not in use yet
@@ -813,17 +703,6 @@ script:
             return;
           }
 
-          if (r.kind == tb::JOB_SETTINGS) {
-            if (r.status == 200) {
-              ESP_LOGI("hb", "settings accepted");
-              id(next_poll_at) = millis();   // pull the rebuilt document straight away
-            } else {
-              ESP_LOGW("hb", "settings rejected: HTTP %d", r.status);
-              id(next_poll_at) = millis() + 5000;
-            }
-            return;
-          }
-
           // JOB_SCREEN. The backend says how soon to poll again (Poll-After, 15 to 1800 s,
           // captured by the fetcher); 60 s when the header is absent. Set before the 304
           // return so an unchanged document still picks up a cadence change.
@@ -872,18 +751,19 @@ script:
 
 interval:
   # Backend scheduler. next_poll_at carries the whole cadence: 10 s while unclaimed (or whatever
-  # /v1/device/config asks for), the Poll-After header on the screen response (60 s when absent), immediately after a settings change
-  # or a tap-to-refresh, 30 s after a 429, and 30 s doubling to 5 minutes after an outage.
+  # /v1/device/config asks for), the Poll-After header on the screen response (60 s when absent),
+  # immediately after a tap-to-refresh, 30 s after a 429, and 30 s doubling to 5 minutes after an
+  # outage.
   - interval: 1s
     then:
       - lambda: |-
           if (!wifi::global_wifi_component->is_connected()) return;
-          if (id(set_step) || id(detail_until) || tb::g_fetcher.busy()) return;
+          if (id(detail_until) || tb::g_fetcher.busy()) return;
           // An install owns the fetch task until it has reported and restarted.
           if (id(fw_installing) || id(fw_reboot_at) || !id(fw_result_body).empty()) return;
           // Queued work is submitted by poll_fetcher, but only while claimed: don't let it
-          // stall the pairing poll if a station was changed before the device was claimed.
-          if (id(claimed) && (!id(pending_settings).empty() || !id(pending_detail).empty())) return;
+          // stall the pairing poll before the device has been claimed.
+          if (id(claimed) && !id(pending_detail).empty()) return;
           if (!tb::secret_valid(id(device_secret))) return;
           if ((int32_t) (millis() - id(next_poll_at)) < 0) return;
           if (id(claimed)) {

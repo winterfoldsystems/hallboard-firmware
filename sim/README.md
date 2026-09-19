@@ -60,8 +60,8 @@ Adding one is a row in the `SCENARIOS` table in `main.cpp` and, usually, a fixtu
 ## What it does not cover
 
 - **The ESPHome-declared pages.** Only the runtime pages in `hb_ui.h` are built here. The service
-  detail page, the station picker, the Wi-Fi list, the password page and the keyboard are declared
-  in `ui.yaml` and belong to ESPHome, so they do not appear.
+  detail page, the Wi-Fi list, the password page and the keyboard are declared in `ui.yaml` and
+  belong to ESPHome, so they do not appear.
 - **Touch.** There is no input device. Scenarios call `show()` and `step()` directly, so nothing
   exercises the swipe gesture, the long press on a row or the scrolling of the agenda. The `dots`
   scenario reaches the page indicator through `step()`, which is the same call the gesture makes.

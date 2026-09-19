@@ -188,8 +188,6 @@ inline std::string g_nowhm;  // "HH:MM"
 // The same instant as a Unix time, 0 until SNTP has synced. The stale rule reads this rather than
 // time(nullptr) so the host simulator's pinned clock decides the stamp too.
 inline uint32_t g_now_epoch = 0;
-// Agenda display mode, mirrored into a restoring global by hallboard.yaml.
-inline bool g_agenda_expanded = false;
 
 // A plain, unstyled object. lv_obj_create would pick up LVGL's default theme, so every panel here
 // starts from lv_container_create and sets what it needs.
@@ -966,11 +964,9 @@ class BoardView : public PageView {
 
   void apply(const Page &pg) override {
     arrivals_ = pg.mode == "arr";
-    // The module decides the empty-state wording and whether the side button has anything to do
-    // here: only a rail board is a pair of CRS stations the picker can change. A document from a
-    // backend that does not send `module` is rail, which is all there was before 1.4.0.
+    // The module decides the empty-state wording. A document from a backend that does not send
+    // `module` is rail, which is all there was before 1.4.0.
     module_ = pg.module;
-    rail_ = module_.empty() || module_ == "rail";
     if (!pg.title.empty()) set_title_(pg.title);
     uids_.clear();
     for (int i = 0; i < ROWS; i++) {
@@ -999,9 +995,10 @@ class BoardView : public PageView {
       // A bus stop shows buses; rail and tube boards both show trains. Only a rail board can
       // promise a window, because only its backend adapter asks for one.
       const char *none = module_ == "bus" ? "No buses" : "No trains";
-      const char *waiting = rail_ ? (arrivals_ ? "None arriving in the next 2 hours"
-                                               : "None due in the next 2 hours")
-                                  : "Nothing expected at this stop";
+      bool rail = module_.empty() || module_ == "rail";
+      const char *waiting = rail ? (arrivals_ ? "None arriving in the next 2 hours"
+                                              : "None due in the next 2 hours")
+                                 : "Nothing expected at this stop";
       lv_label_set_text(rows_[0].dest, missing ? "Board unavailable" : none);
       lv_label_set_text(rows_[0].status, missing ? "Not in the last update from the backend" : waiting);
       set_tok(rows_[0].status, T_CHALK70);
@@ -1012,22 +1009,11 @@ class BoardView : public PageView {
 
   void tick(esphome::ESPTime now) override { tick_header_(now); }
 
-  // Used after the station picker so the header is right before the new document arrives.
-  void set_pending(const std::string &title) {
-    set_title_(title);
-    uids_.clear();
-    for (auto &r : rows_) clear_row_(r);
-    set_stamp_(0, false);
-  }
-
   const std::string &uid_at(int i) const {
     static const std::string none;
     if (i < 0 || i >= (int) uids_.size()) return none;
     return uids_[i];
   }
-
-  // True for a national rail board, the only kind the on-device station picker can edit.
-  bool rail() const { return rail_; }
 
  private:
   struct Row {
@@ -1051,7 +1037,6 @@ class BoardView : public PageView {
   std::vector<std::string> uids_;
   std::string module_;
   bool arrivals_ = false;
-  bool rail_ = true;
 };
 
 // ---- agenda: the 1a render_calendar algorithm, with cards created on demand instead of a pool of
@@ -1081,16 +1066,13 @@ class AgendaView : public PageView {
 
   void tick(esphome::ESPTime now) override { tick_header_(now); }
 
-  void scroll_top() { lv_obj_scroll_to_y(list_, 0, LV_ANIM_OFF); }
-
   void render() {
     for (auto &c : cards_) set_hidden(c.box, true);
     for (auto &h : heads_) {
       set_hidden(h.text, true);
       set_hidden(h.rule, true);
     }
-    const bool expanded = g_agenda_expanded;
-    const int CARD_H = expanded ? 64 : 40, GAP = 6, HEAD_GAP = 14;
+    const int CARD_H = 40, GAP = 6, HEAD_GAP = 14;
     int card = 0, head = 0, y = 16, shown = 0;  // start clear of the rule under the title
     std::string last_day;
     for (const auto &it : events_) {
@@ -1115,20 +1097,12 @@ class AgendaView : public PageView {
       lv_obj_set_pos(c.box, 14, y);
       lv_obj_set_height(c.box, CARD_H);
       set_hidden(c.box, false);
-      if (expanded) {
-        // line 1: "start - end" in amber, location right-aligned in grey; line 2: title
-        std::string range = it.all_day ? "All day" : (has_end ? it.t + " - " + it.u : it.t);
-        place_label_(c.a, 14, 6, 200, range);
-        place_label_(c.b, 224, 8, 214, it.l);
-        place_label_(c.c, 14, 34, 424, it.s);
-      } else {
-        // one line: start, title, end time right-aligned in grey
-        place_label_(c.a, 14, 8, 82, it.all_day ? "All day" : it.t);
-        std::string endtxt = has_end ? it.u : "";
-        int title_w = endtxt.empty() ? 336 : 336 - 90;
-        place_label_(c.c, 102, 8, title_w, it.s);
-        place_label_(c.b, 348, 10, 90, endtxt);
-      }
+      // one line: start, title, end time right-aligned in grey
+      place_label_(c.a, 14, 8, 82, it.all_day ? "All day" : it.t);
+      std::string endtxt = has_end ? it.u : "";
+      int title_w = endtxt.empty() ? 336 : 336 - 90;
+      place_label_(c.c, 102, 8, title_w, it.s);
+      place_label_(c.b, 348, 10, 90, endtxt);
       y += CARD_H + GAP;
       card++;
       shown++;
@@ -1484,51 +1458,6 @@ class PageHost {
   BoardView *current_board() const {
     PageView *v = current_view();
     return (v != nullptr && v->type() == 'b') ? static_cast<BoardView *>(v) : nullptr;
-  }
-  AgendaView *current_agenda() const {
-    PageView *v = current_view();
-    return (v != nullptr && v->type() == 'a') ? static_cast<AgendaView *>(v) : nullptr;
-  }
-
-  // 0 or 1 for the first and second board pages in display order, -1 for anything else. This is
-  // the `board` field of PATCH /v1/device/settings and the index into the station globals.
-  int board_ordinal(size_t index) const {
-    int n = 0;
-    for (size_t i = 0; i < views_.size(); i++) {
-      if (views_[i]->type() != 'b') continue;
-      if (i == index) return n < 2 ? n : -1;
-      n++;
-    }
-    return -1;
-  }
-  // The board ordinal the side button's station picker should edit, starting from the page at
-  // `index`: that page when it is a rail board, otherwise the first rail board in the document so
-  // the button still works from the clock. -1 when there is nothing to edit, which is the answer
-  // on a tube or bus board (no CRS station to change) and in a document with no rail board.
-  int picker_ordinal(size_t index) const {
-    if (index < views_.size() && views_[index]->type() == 'b') {
-      int ord = board_ordinal(index);
-      return (ord >= 0 && static_cast<const BoardView *>(views_[index].get())->rail()) ? ord : -1;
-    }
-    int n = 0;
-    for (const auto &v : views_) {
-      if (v->type() != 'b') continue;
-      if (n >= 2) break;   // only the first two boards have station globals behind them
-      if (static_cast<const BoardView *>(v.get())->rail()) return n;
-      n++;
-    }
-    return -1;
-  }
-
-  // The carousel index of a board ordinal, or -1 when the document has no such board.
-  int board_index(int ordinal) const {
-    int n = 0;
-    for (size_t i = 0; i < views_.size(); i++) {
-      if (views_[i]->type() != 'b') continue;
-      if (n == ordinal) return (int) i;
-      n++;
-    }
-    return -1;
   }
 
  private:

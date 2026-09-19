@@ -1,5 +1,5 @@
-// Pure logic for the HallBoard display: the backend's other responses, station search, Wi-Fi
-// scanning and the background HTTP task. The device talks to one host (the HallBoard backend) and
+// Pure logic for the HallBoard display: the backend's other responses, Wi-Fi scanning and the
+// background HTTP task. The device talks to one host (the HallBoard backend) and
 // renders the document it serves; it never parses a data provider's schema. Glue to LVGL lives in
 // the YAML lambdas in hallboard.yaml. The screen document itself is parsed in hb_parse.h, which
 // this file includes.
@@ -17,7 +17,6 @@
 #include "esphome/core/log.h"
 #include "hb_parse.h"
 #include "hb_ui.h"
-#include "stations.h"
 #ifdef USE_WIFI
 #include <atomic>
 #include <strings.h>
@@ -41,80 +40,6 @@ namespace tb {
 
 // Firmware version, sent as X-Firmware on every request. Set from the YAML substitution on boot.
 inline std::string g_fw;
-
-// ---------------------------------------------------------------- CRS codes packed into int (restorable globals)
-inline int pack_code(const std::string &c) {
-  if (c.empty()) return 0;
-  int v = 0;
-  for (int i = 0; i < 3; i++) {
-    char ch = i < (int) c.size() ? toupper((unsigned char) c[i]) : 'A';
-    v = v * 27 + ((ch >= 'A' && ch <= 'Z') ? ch - 'A' + 1 : 0);
-  }
-  return v;
-}
-inline std::string unpack_code(int v) {
-  if (v <= 0) return "";
-  char out[4];
-  for (int i = 2; i >= 0; i--) { int d = v % 27; v /= 27; out[i] = d ? 'A' + d - 1 : '?'; }
-  out[3] = 0;
-  return out;
-}
-
-inline std::string upper(std::string s) { for (auto &c : s) c = toupper((unsigned char) c); return s; }
-inline std::string trim(const std::string &s) {
-  size_t a = s.find_first_not_of(" \t"), b = s.find_last_not_of(" \t");
-  return a == std::string::npos ? "" : s.substr(a, b - a + 1);
-}
-
-inline std::string station_name(const std::string &code) {
-  for (int i = 0; i < STATION_COUNT; i++) if (code == STATIONS[i].code) return STATIONS[i].name;
-  return code;
-}
-
-// Indices into STATIONS[] ranked for a partial name or code.
-inline std::vector<int> search_stations(const std::string &q_in, int limit) {
-  std::string q = trim(upper(q_in));
-  std::vector<int> exact, starts, words, contains;
-  if (q.empty()) return exact;
-  for (int i = 0; i < STATION_COUNT; i++) {
-    std::string n = upper(STATIONS[i].name);
-    const char *code = STATIONS[i].code;
-    if (q == code) { exact.push_back(i); continue; }
-    if (n.rfind(q, 0) == 0 || strncmp(code, q.c_str(), q.size()) == 0) { starts.push_back(i); continue; }
-    bool word = false;
-    size_t p = 0;
-    while (p < n.size()) {
-      size_t e = n.find_first_of(" (", p);
-      if (e == std::string::npos) e = n.size();
-      if (e > p && n.compare(p, q.size(), q) == 0) { word = true; break; }
-      p = e + 1;
-    }
-    if (word) words.push_back(i);
-    else if (n.find(q) != std::string::npos) contains.push_back(i);
-  }
-  std::vector<int> out;
-  for (auto *v : {&exact, &starts, &words, &contains})
-    for (int i : *v) if ((int) out.size() < limit) out.push_back(i);
-  return out;
-}
-
-// Board-style abbreviations, applied only until the name fits.
-inline std::string shorten(std::string name, size_t limit) {
-  static const char *AB[][2] = {
-    {"London ", ""}, {"International", "Intl"}, {"Harbour", "Hbr"}, {"Terminal", "T"}, {"Junction", "Jn"},
-    {"Parkway", "Pkwy"}, {"Central", "Ctrl"}, {"Street", "St"}, {"Road", "Rd"}, {"Bridge", "Br"},
-    {"Airport", "Apt"}, {"Temple Meads", "TM"}, {"Piccadilly", "Picc"}, {"Victoria", "Vic"}, {"Cross", "X"},
-    {" Bus", " (bus)"}, {"South Western Railway", "SWR"}, {"Great Western Railway", "GWR"},
-    {"Southern", "SN"}, {"Thameslink", "TL"}};
-  if (name.size() <= limit) return name;
-  for (auto &ab : AB) {
-    size_t p;
-    bool hit = false;
-    while ((p = name.find(ab[0])) != std::string::npos) { name.replace(p, strlen(ab[0]), ab[1]); hit = true; }
-    if (hit) { name = trim(name); if (name.size() <= limit) return name; }
-  }
-  return name;
-}
 
 // ---------------------------------------------------------------- device identity
 // The device secret is 64 lowercase hex characters held in a restored char[65] global. It is
@@ -337,13 +262,12 @@ inline const char *signal_bars(int rssi) {
 // ---------------------------------------------------------------- background HTTP fetcher
 // One FreeRTOS task performs the request so the main loop (LVGL, touch) never blocks on the
 // network. The main loop submits a Job, polls for the Result, and does all parsing/drawing.
-enum JobKind { JOB_PAIR, JOB_CONFIG, JOB_SCREEN, JOB_SETTINGS, JOB_DETAIL, JOB_FIRMWARE, JOB_OTA, JOB_FWRESULT };
-enum JobMethod { M_GET, M_POST, M_PATCH };
+enum JobKind { JOB_PAIR, JOB_CONFIG, JOB_SCREEN, JOB_DETAIL, JOB_FIRMWARE, JOB_OTA, JOB_FWRESULT };
+enum JobMethod { M_GET, M_POST };
 struct Job {
   JobKind kind = JOB_SCREEN;
   JobMethod method = M_GET;
   std::string url, auth, body, inm, tag;
-  int board = 0;
   std::string sha;            // JOB_OTA: the announced SHA-256, 64 lowercase hex
   uint32_t size = 0;          // JOB_OTA: the announced image size, enforced exactly
 };
@@ -351,7 +275,6 @@ struct Result {
   JobKind kind = JOB_SCREEN;
   int status = -1;            // < 0: the request never completed
   std::string body, etag, tag;
-  int board = 0;
   uint32_t poll_after = 0;    // seconds from the Poll-After response header, 0 if absent
   std::string err;            // JOB_OTA: short failure code, empty on success
 };
@@ -444,11 +367,10 @@ class Fetcher {
   static Result do_request(const Job &j) {
     Result r;
     r.kind = j.kind;
-    r.board = j.board;
     r.tag = j.tag;
     esp_http_client_config_t cfg = {};
     cfg.url = j.url.c_str();
-    cfg.method = j.method == M_POST ? HTTP_METHOD_POST : (j.method == M_PATCH ? HTTP_METHOD_PATCH : HTTP_METHOD_GET);
+    cfg.method = j.method == M_POST ? HTTP_METHOD_POST : HTTP_METHOD_GET;
     cfg.timeout_ms = 20000;
     cfg.crt_bundle_attach = esp_crt_bundle_attach;   // TLS verified against the ESP-IDF bundle
     cfg.buffer_size = 4096;

@@ -197,7 +197,6 @@ void reset_ui() {
   hb::g_today.clear();
   hb::g_nowhm.clear();
   hb::g_now_epoch = 0;
-  hb::g_agenda_expanded = false;
   lv_obj_clean(lv_screen_active());
   lv_refr_now(nullptr);
 }
