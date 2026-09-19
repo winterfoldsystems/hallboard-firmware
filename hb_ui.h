@@ -1644,7 +1644,7 @@ class SkyView : public PageView {
   // and a bar area of 68. The six columns measure 400 on a 68 pitch, which is what centres them
   // in the 448 card. The card is taller than the design's 128 because a rasterised 16 px label
   // and a 14 px one need more room than the mock's line boxes did.
-  static const int COLS = 6, COL_W = 60, COL_PITCH = 68, CARD_PAD = 24, BAR_MAX = 68;
+  static const int COLS = 6, COL_W = 60, COL_PITCH = 68, CARD_PAD = 24, BAR_MAX = 68, BAR_MIN = 24;
 
   struct Col {
     lv_obj_t *root = nullptr, *temp = nullptr, *bar = nullptr, *hour = nullptr;
@@ -1670,12 +1670,16 @@ class SkyView : public PageView {
       set_hidden(c.root, true);
     }
     bar_top_ = th + 6;
+    temp_h_ = th;
   }
 
   // The focus column is the first hour at half a chance of rain or more, which is the hour the
   // sentence is about. With nothing above half, the next hour is the one to read. A bar's height
-  // is the chance of rain and its brightness the temperature: the warmest of the six slots is
-  // the full hue and the coldest a quarter of it, so the strip reads as a day warming and cooling.
+  // is the temperature, because the number over it is: the warmest of the six slots is the full
+  // height and the coldest about a third of it, so the strip reads as a day warming and cooling,
+  // and each number rides on top of its bar. The chance of rain is the bar's brightness, a dry
+  // hour a third of the hue and a certain one all of it, which is how "rain from about four"
+  // shows in the strip.
   void fill_strip_(const std::vector<HourSlot> &hours) {
     int focus = 0, lo = 0, hi = 0;
     bool any = false, found = false;
@@ -1699,14 +1703,18 @@ class SkyView : public PageView {
       const HourSlot &s = hours[i];
       label_text(c.temp, s.t.empty() ? "" : s.t + "\xC2\xB0");
       set_tok(c.temp, i == focus ? T_CHALK : T_HEADLINE);
-      // A dry hour keeps a stub: an empty column would read as a missing reading.
-      int h = s.r * BAR_MAX / 100;
-      if (h < 4) h = 4;
+      // The coldest hour keeps a third of the height: a bar of nothing would read as a missing
+      // reading, and so would an hour with no temperature, which gets the same.
+      int h = BAR_MIN;
+      if (!s.t.empty()) {
+        h = hi > lo ? BAR_MIN + (BAR_MAX - BAR_MIN) * (atoi(s.t.c_str()) - lo) / (hi - lo)
+                    : (BAR_MIN + BAR_MAX) / 2;
+      }
       lv_obj_set_pos(c.bar, 0, bar_top_ + BAR_MAX - h);
       lv_obj_set_height(c.bar, h);
-      int opa = 255;
-      if (hi > lo && !s.t.empty()) opa = 77 + (255 - 77) * (atoi(s.t.c_str()) - lo) / (hi - lo);
-      lv_obj_set_style_opa(c.bar, (lv_opa_t) opa, 0);
+      lv_obj_set_y(c.temp, bar_top_ + BAR_MAX - h - 6 - temp_h_);
+      int r = s.r < 0 ? 0 : s.r > 100 ? 100 : s.r;
+      lv_obj_set_style_opa(c.bar, (lv_opa_t) (85 + (255 - 85) * r / 100), 0);
       label_text(c.hour, s.h);
       set_tok(c.hour, i == focus ? T_TIME2 : T_HOUR);
       set_hidden(c.root, false);
@@ -1743,7 +1751,7 @@ class SkyView : public PageView {
   lv_obj_t *card_ = nullptr;
   Col cols_[COLS];
   EmptyCard empty_;
-  int card_h_ = 0, card_y_ = 0, bar_top_ = 0;
+  int card_h_ = 0, card_y_ = 0, bar_top_ = 0, temp_h_ = 0;
 };
 
 // ---- list: the to-do face, laid out as ListFace in the design system.
