@@ -95,13 +95,45 @@ def strip_c_comments(src):
     return re.sub(rb"//[^\n]*", b" ", src)
 
 
+def strip_yaml_comment(item):
+    """Drop a trailing `#` comment, leaving one that is inside a quoted glyph list alone."""
+    out = bytearray()
+    in_quote = False
+    i = 0
+    while i < len(item):
+        c = item[i:i + 1]
+        if in_quote and c == b"\\":
+            out += item[i:i + 2]
+            i += 2
+            continue
+        if c == b'"':
+            in_quote = not in_quote
+        elif c == b"#" and not in_quote:
+            break
+        out += c
+        i += 1
+    return bytes(out).strip()
+
+
 def ui_yaml_font_glyphs(path):
-    """The glyph lists in ui.yaml's `font:` block, one set per font id."""
+    """The glyph lists in ui.yaml's `font:` block, one set per font id.
+
+    A hand parser rather than PyYAML, which is not in the standard library. It understands the
+    two shapes the block uses: an inline `glyphs: ["..."]` and a block list, either of which may
+    carry a `&name` anchor, plus `glyphs: *name` for a font that reuses an earlier list. An
+    anchored set is shared by reference, so items added after the anchor line are in it too.
+    """
     lines = read(path).split(b"\n")
     fonts = {}
+    anchors = {}
     in_font = False
     font_id = None
     in_glyphs = False
+
+    def add(quoted_in):
+        for quoted in re.findall(rb'"((?:[^"\\]|\\.)*)"', quoted_in):
+            fonts[font_id] |= code_points(decode_c_bytes(quoted), path, [])
+
     for line in lines:
         if re.match(rb"^font:\s*$", line):
             in_font = True
@@ -124,19 +156,26 @@ def ui_yaml_font_glyphs(path):
         m = re.match(rb"^glyphs:\s*(.*)$", stripped)
         if m:
             in_glyphs = True
-            rest = m.group(1).strip()
+            rest = strip_yaml_comment(m.group(1))
+            anchor = re.match(rb"^&(\S+)\s*(.*)$", rest)
+            if anchor:
+                # The set object itself is the anchor, so the items below land in it as well.
+                anchors[anchor.group(1).decode()] = fonts[font_id]
+                rest = anchor.group(2).strip()
+            alias = re.match(rb"^\*(\S+)$", rest)
+            if alias:
+                fonts[font_id] |= anchors.get(alias.group(1).decode(), set())
+                in_glyphs = False
+                continue
             if rest.startswith(b"["):                      # inline list on one line
-                for quoted in re.findall(rb'"((?:[^"\\]|\\.)*)"', rest):
-                    fonts[font_id] |= code_points(decode_c_bytes(quoted), path, [])
+                add(rest)
                 in_glyphs = False
             continue
         if in_glyphs:
             if not stripped.startswith(b"-"):
                 in_glyphs = False
                 continue
-            item = stripped[1:].split(b"#")[0].strip()      # drop the trailing comment
-            for quoted in re.findall(rb'"((?:[^"\\]|\\.)*)"', item):
-                fonts[font_id] |= code_points(decode_c_bytes(quoted), path, [])
+            add(strip_yaml_comment(stripped[1:]))
     return fonts
 
 

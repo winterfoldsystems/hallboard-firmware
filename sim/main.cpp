@@ -36,27 +36,40 @@ const int W = 480, H = 480;
 const char *FW = "1.4.0";
 
 // 2026-09-18 08:41:07 Europe/London. Chosen so the agenda fixture has a spent event, a live one
-// and two later days, and so "Updated 08:38" is a couple of minutes behind the clock.
+// and two later days, and so the stamp reads "LIVE · 08:38", inside the five-minute window.
 const time_t NOW_EPOCH = 1789717267;
 
 // ---------------------------------------------------------------- fonts
-// The four sizes hb_ui.h asks hb::g_fonts for. ESPHome rasterises these at build time from the
-// `font:` entries in ui.yaml; here TinyTTF does it at run time from the same TTFs. S2 replaces
-// this one table with the Figtree and IBM Plex Mono set and nothing else in this file changes.
-//
-// TinyTTF is stb_truetype underneath and knows nothing about variable fonts, so a `[wght]` file
-// renders at its default instance (Montserrat 400, not the Medium ui.yaml asks for). The letter
-// shapes and the metrics are right; the stems are a shade lighter than the board's.
+// Every slot hb_ui.h asks hb::g_fonts for. ESPHome rasterises these at build time from the
+// `font:` entries in ui.yaml, which get a static instance per weight out of the Google CSS API;
+// here TinyTTF does it at run time from the matching static TTFs, so a 600 is really a 600.
 struct FontSpec {
-  const char *slot;   // which hb::g_fonts member
+  const lv_font_t *hb::FontSet::*slot;
   const char *path;
   int px;
 };
+const char *FIG_600 = "fonts/Figtree-SemiBold.ttf";
+const char *FIG_500 = "fonts/Figtree-Medium.ttf";
+const char *FIG_400 = "fonts/Figtree-Regular.ttf";
+const char *FIG_700 = "fonts/Figtree-Bold.ttf";
+const char *MONO_400 = "fonts/IBMPlexMono-Regular.ttf";
 const FontSpec FONTS[] = {
-    {"clock", "fonts/Montserrat.ttf", 120},
-    {"wordmark", "fonts/Montserrat.ttf", 56},
-    {"code", "fonts/Montserrat.ttf", 64},
-    {"icon", "../fonts/materialdesignicons-webfont.ttf", 48},
+    {&hb::FontSet::clock132, FIG_600, 132},
+    {&hb::FontSet::hero88, FIG_600, 88},
+    {&hb::FontSet::sans600_30, FIG_600, 30},
+    {&hb::FontSet::sans600_20, FIG_600, 20},
+    {&hb::FontSet::sans500_22, FIG_500, 22},
+    {&hb::FontSet::sans500_20, FIG_500, 20},
+    {&hb::FontSet::sans500_18, FIG_500, 18},
+    {&hb::FontSet::sans500_16, FIG_500, 16},
+    {&hb::FontSet::sans400_18, FIG_400, 18},
+    {&hb::FontSet::mark50, FIG_700, 50},
+    {&hb::FontSet::mono64, MONO_400, 64},
+    {&hb::FontSet::mono20, MONO_400, 20},
+    {&hb::FontSet::mono16, MONO_400, 16},
+    {&hb::FontSet::mono15, MONO_400, 15},
+    {&hb::FontSet::mono14, MONO_400, 14},
+    {&hb::FontSet::icon, "../fonts/materialdesignicons-webfont.ttf", 48},
 };
 
 std::string read_file(const std::string &path) {
@@ -85,10 +98,7 @@ void load_fonts() {
       fprintf(stderr, "could not rasterise %s at %d px\n", spec.path, spec.px);
       exit(2);
     }
-    if (strcmp(spec.slot, "clock") == 0) hb::g_fonts.clock = font;
-    else if (strcmp(spec.slot, "wordmark") == 0) hb::g_fonts.wordmark = font;
-    else if (strcmp(spec.slot, "code") == 0) hb::g_fonts.code = font;
-    else if (strcmp(spec.slot, "icon") == 0) hb::g_fonts.icon = font;
+    hb::g_fonts.*spec.slot = font;
   }
 }
 
@@ -186,6 +196,7 @@ void reset_ui() {
   hb::g_host.reset();
   hb::g_today.clear();
   hb::g_nowhm.clear();
+  hb::g_now_epoch = 0;
   hb::g_agenda_expanded = false;
   lv_obj_clean(lv_screen_active());
   lv_refr_now(nullptr);
@@ -250,6 +261,14 @@ const Scenario SCENARIOS[] = {
        s.show(0);
      }},
     {"board-live", [](Sim &s) { booted(s, "screen_full.json", 1); }},
+    {"dots",
+     [](Sim &s) {
+       // A swipe from the clock to the first board: the page indicator is up, part way through
+       // the two seconds it waits before fading.
+       booted(s, "screen_full.json", 0);
+       hb::g_host.step(1);
+       s.pump(600);
+     }},
     {"board-stale", [](Sim &s) { booted(s, "board_stale.json", 1); }},
     {"board-empty", [](Sim &s) { booted(s, "board_empty.json", 1); }},
     {"board-unavailable", [](Sim &s) { booted(s, "board_unavailable.json", 1); }},
@@ -315,8 +334,8 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  // The zone the fixtures declare. when_text() and the clock both go through localtime, so this
-  // is what makes "Updated 08:38" and "Friday 18 September" the same on any machine.
+  // The zone the fixtures declare. stamp_text() and the clock both go through localtime, so this
+  // is what makes "LIVE · 08:38" and "Friday 18 September" the same on any machine.
   setenv("TZ", "Europe/London", 1);
   tzset();
 

@@ -27,6 +27,7 @@
 #include "esphome/components/lvgl/lvgl_esphome.h"
 #include "esphome/core/log.h"
 #include "esphome/core/time.h"
+#include "hb_tokens.h"
 
 namespace hb {
 
@@ -97,22 +98,36 @@ inline int hhmm_to_minutes(const std::string &s) {
 }
 
 // ---------------------------------------------------------------- fonts and icons
-// Set once on boot from the `font:` entries in ui.yaml; the built-in Montserrat bitmaps are
-// referenced directly (hidden anchor labels in ui.yaml are what compiles them in).
+// The design system's type scale: Figtree for text, IBM Plex Mono for times, codes and meta.
+// Set once on boot from the `font:` entries in ui.yaml (hidden anchor labels there are what
+// compiles each one in); the host simulator fills the same members from TTFs.
 struct FontSet {
-  const lv_font_t *clock = nullptr;  // 120 px digits for the clock page
-  const lv_font_t *code = nullptr;   // 64 px for the pairing code
-  const lv_font_t *icon = nullptr;   // 48 px Material Design Icons
-  const lv_font_t *wordmark = nullptr;  // 56 px for the boot wordmark
+  const lv_font_t *clock132 = nullptr;   // Figtree 600, the clock face
+  const lv_font_t *hero88 = nullptr;     // Figtree 600, the temperature hero
+  const lv_font_t *sans600_30 = nullptr;
+  const lv_font_t *sans600_20 = nullptr;
+  const lv_font_t *sans500_22 = nullptr;
+  const lv_font_t *sans500_20 = nullptr;
+  const lv_font_t *sans500_18 = nullptr;
+  const lv_font_t *sans500_16 = nullptr;
+  const lv_font_t *sans400_18 = nullptr;
+  const lv_font_t *mark50 = nullptr;     // Figtree 700, the two letters of the mark
+  const lv_font_t *mono64 = nullptr;     // IBM Plex Mono 400, the pairing code
+  const lv_font_t *mono20 = nullptr;
+  const lv_font_t *mono16 = nullptr;
+  const lv_font_t *mono15 = nullptr;
+  const lv_font_t *mono14 = nullptr;
+  const lv_font_t *icon = nullptr;       // 48 px Material Design Icons, until S7 replaces them
 };
 inline FontSet g_fonts;
 
-inline const lv_font_t *font_clock() { return g_fonts.clock != nullptr ? g_fonts.clock : &lv_font_montserrat_28; }
-inline const lv_font_t *font_code() { return g_fonts.code != nullptr ? g_fonts.code : &lv_font_montserrat_28; }
-inline const lv_font_t *font_icon() { return g_fonts.icon != nullptr ? g_fonts.icon : &lv_font_montserrat_28; }
-inline const lv_font_t *font_wordmark() {
-  return g_fonts.wordmark != nullptr ? g_fonts.wordmark : &lv_font_montserrat_28;
-}
+// A font slot that has not been filled yet draws in whatever ui.yaml made the default, which is
+// readable at any size rather than a screen of missing-glyph boxes.
+inline const lv_font_t *F(const lv_font_t *f) { return f != nullptr ? f : LV_FONT_DEFAULT; }
+
+// Letter spacing, in whole pixels. The mono sizes need a little air, the display sizes need
+// taking in; the amounts are the design's.
+inline void tracked(lv_obj_t *o, int px) { lv_obj_set_style_text_letter_space(o, px, 0); }
 
 // The icon names the document may use, in the order docs/screen-document.md lists them, mapped to
 // Material Design Icons codepoints as UTF-8. An unknown name renders as nothing.
@@ -150,27 +165,13 @@ inline const char *icon_glyph(const std::string &name) {
 }
 
 // ---------------------------------------------------------------- shared look
-enum : uint32_t {
-  COL_BG = 0x000000,
-  COL_CARD = 0x1C1C1E,
-  COL_RULE = 0x444444,
-  COL_FOOT = 0x888888,
-  COL_WHITE = 0xFFFFFF,
-  COL_AMBER = 0xFFB000,
-  COL_DIM = 0xC8C8C8,
-  COL_GREY = 0x9A9A9A,
-  COL_HEAD = 0xAAAAAA,
-  COL_BODY = 0xEDEDED,
-  COL_HRULE = 0x3A3A3C,
-  COL_GREEN = 0x3DDC84,
-  COL_RED = 0xFF4D4D,
-};
-
-inline lv_color_t row_colour(const std::string &c) {
-  if (c == "G") return lv_color_hex(COL_GREEN);
-  if (c == "R") return lv_color_hex(COL_RED);
-  if (c == "Y") return lv_color_hex(COL_AMBER);
-  return lv_color_hex(COL_DIM);
+// The document's one-letter row colour, as a token. W (and anything unknown) is not a state, so
+// it reads as ordinary text rather than a colour the household has to decode.
+inline Tok row_colour(const std::string &c) {
+  if (c == "G") return T_OK;
+  if (c == "R") return T_OFF;
+  if (c == "Y") return T_LATE;
+  return T_CHALK70;
 }
 
 // The UI never calls ESPHome scripts directly: hallboard.yaml installs a callback on boot and the
@@ -184,6 +185,9 @@ inline void emit(const std::string &msg) {
 // Local time as the views need it, refreshed once a second by PageHost::tick.
 inline std::string g_today;  // "YYYYMMDD", empty until SNTP has synced
 inline std::string g_nowhm;  // "HH:MM"
+// The same instant as a Unix time, 0 until SNTP has synced. The stale rule reads this rather than
+// time(nullptr) so the host simulator's pinned clock decides the stamp too.
+inline uint32_t g_now_epoch = 0;
 // Agenda display mode, mirrored into a restoring global by hallboard.yaml.
 inline bool g_agenda_expanded = false;
 
@@ -203,14 +207,22 @@ inline lv_obj_t *mk_obj(lv_obj_t *parent, int x, int y, int w, int h) {
   return o;
 }
 
-inline lv_obj_t *mk_rule(lv_obj_t *parent, int x, int y, int w, uint32_t colour = COL_RULE) {
-  lv_obj_t *o = mk_obj(parent, x, y, w, 2);
-  lv_obj_set_style_bg_color(o, lv_color_hex(colour), 0);
+// A filled panel: a card, a dot, a bar. mk_obj sets bg_opa locally, and a local style beats an
+// added one, so the opacity is set here and only the colour comes from the shared style.
+inline lv_obj_t *mk_panel(lv_obj_t *parent, int x, int y, int w, int h, Tok bg, int radius) {
+  lv_obj_t *o = mk_obj(parent, x, y, w, h);
+  lv_obj_add_style(o, &g_bg[bg], 0);
   lv_obj_set_style_bg_opa(o, LV_OPA_COVER, 0);
+  lv_obj_set_style_radius(o, radius, 0);
   return o;
 }
 
-inline lv_obj_t *mk_label(lv_obj_t *parent, int x, int y, int w, int h, const lv_font_t *font, uint32_t colour,
+// The design's hairline: one pixel, not two.
+inline lv_obj_t *mk_rule(lv_obj_t *parent, int x, int y, int w, Tok colour = T_LINE) {
+  return mk_panel(parent, x, y, w, 1, colour, 0);
+}
+
+inline lv_obj_t *mk_label(lv_obj_t *parent, int x, int y, int w, int h, const lv_font_t *font, Tok tok,
                           const char *text = "") {
   lv_obj_t *l = lv_label_create(parent);
   lv_obj_set_pos(l, x, y);
@@ -219,9 +231,17 @@ inline lv_obj_t *mk_label(lv_obj_t *parent, int x, int y, int w, int h, const lv
   lv_obj_set_style_pad_all(l, 0, 0);
   lv_obj_set_style_bg_opa(l, LV_OPA_TRANSP, 0);
   lv_obj_set_style_text_font(l, font, 0);
-  lv_obj_set_style_text_color(l, lv_color_hex(colour), 0);
+  lv_obj_add_style(l, &g_text[tok], 0);
   lv_label_set_text(l, text);
   return l;
+}
+
+// Recolour a label that was built with mk_label. The old style has to come off first, and which
+// one it was is not recorded, so every one is asked to leave; removing a style an object does not
+// have is a walk over a list of two or three entries and nothing more.
+inline void set_tok(lv_obj_t *o, Tok tok) {
+  for (int i = 0; i < T_COUNT; i++) lv_obj_remove_style(o, &g_text[i], 0);
+  lv_obj_add_style(o, &g_text[tok], 0);
 }
 
 inline void label_text(lv_obj_t *l, const std::string &text) { lv_label_set_text(l, text.c_str()); }
@@ -232,36 +252,211 @@ inline void set_hidden(lv_obj_t *o, bool hidden) {
     lv_obj_remove_flag(o, LV_OBJ_FLAG_HIDDEN);
 }
 
-// A card: the dark rounded panel with a coloured left edge used by boards and the agenda.
-inline lv_obj_t *mk_card(lv_obj_t *parent, int x, int y, int w, int h, uint32_t edge) {
-  lv_obj_t *o = mk_obj(parent, x, y, w, h);
-  lv_obj_set_style_bg_color(o, lv_color_hex(COL_CARD), 0);
-  lv_obj_set_style_bg_opa(o, LV_OPA_COVER, 0);
-  lv_obj_set_style_radius(o, 10, 0);
-  lv_obj_set_style_border_width(o, 3, 0);
-  lv_obj_set_style_border_side(o, LV_BORDER_SIDE_LEFT, 0);
-  lv_obj_set_style_border_color(o, lv_color_hex(edge), 0);
-  return o;
+// A card: the dark rounded panel boards and the agenda rest their rows on. The design has no
+// coloured left edge; a row's state is in its status colour.
+inline lv_obj_t *mk_card(lv_obj_t *parent, int x, int y, int w, int h) {
+  return mk_panel(parent, x, y, w, h, T_CARD, 16);
 }
 
-// "Updated HH:MM", with "(stale)" when the backend is serving its last good data.
-inline std::string when_text(uint32_t asof, bool stale) {
-  if (asof == 0) return "Loading...";
+// True when what is on screen is older than the household should read as current: the document
+// said so, or nothing has been fetched for five minutes. Before the clock is set there is no way
+// to tell, and a board that says LIVE too long is better than one that cries stale on every boot.
+inline bool stale_now(uint32_t asof, bool stale) {
+  if (stale) return true;
+  if (asof == 0 || g_now_epoch == 0) return false;
+  return g_now_epoch > asof + 300;
+}
+
+// The stamp in the corner of every content face: "LIVE · 08:41", "SHOWING 08:12", "LOADING".
+inline std::string stamp_text(uint32_t asof, bool stale) {
+  if (asof == 0) return "LOADING";
   time_t t = (time_t) asof;
   struct tm lt;
   localtime_r(&t, &lt);
   char buf[8];
   strftime(buf, sizeof buf, "%H:%M", &lt);
-  return std::string("Updated ") + buf + (stale ? " (stale)" : "");
+  // U+00B7, the middle dot the design separates with.
+  return stale_now(asof, stale) ? std::string("SHOWING ") + buf : std::string("LIVE \xC2\xB7 ") + buf;
 }
+
+// Uppercase an ASCII string, for the strip's left label and the agenda's day headings. Document
+// text is ASCII by the time the parser is done with it, so there is nothing else to fold.
+inline std::string upper(std::string s) {
+  for (auto &c : s) c = (char) toupper((unsigned char) c);
+  return s;
+}
+
+// ---------------------------------------------------------------- chrome
+// The band across the top of every face: a short line on the left, optionally with a hue dot in
+// front of it, and a stamp or a time on the right. 28 px tall, inset by the face's margin.
+class StatusStrip {
+ public:
+  void build(lv_obj_t *parent, int margin) {
+    if (root_ != nullptr) return;
+    int w = 480 - 2 * margin;
+    root_ = mk_obj(parent, margin, margin, w, 28);
+    dot_ = mk_panel(root_, 0, 10, 9, 9, T_LIFT, LV_RADIUS_CIRCLE);
+    set_hidden(dot_, true);
+    // The right label takes the last 160 px, so the left one stops ten pixels short of it.
+    left_ = mk_label(root_, 0, 4, w - 170, 22, F(g_fonts.mono15), T_CHALK70, "");
+    tracked(left_, 1);
+    lv_label_set_long_mode(left_, LV_LABEL_LONG_MODE_DOTS);
+    right_ = mk_label(root_, w - 160, 4, 160, 22, F(g_fonts.mono15), T_CHALK70, "");
+    tracked(right_, 1);
+    lv_obj_set_style_text_align(right_, LV_TEXT_ALIGN_RIGHT, 0);
+  }
+
+  // A face that wants its title here rather than a meta line swaps the left font once.
+  void set_left_font(const lv_font_t *f) {
+    if (left_ == nullptr) return;
+    lv_obj_set_style_text_font(left_, f, 0);
+    tracked(left_, 0);
+  }
+  // The colour is only swapped when it has really changed: the right label is rewritten once a
+  // second and a style swap is a walk over every token.
+  void set_left(const std::string &text, Tok tok = T_CHALK70) {
+    if (left_ == nullptr) return;
+    lv_label_set_text(left_, text.c_str());
+    if (tok == left_tok_) return;
+    left_tok_ = tok;
+    set_tok(left_, tok);
+  }
+  void set_right(const std::string &text, Tok tok = T_CHALK70) {
+    if (right_ == nullptr) return;
+    lv_label_set_text(right_, text.c_str());
+    if (tok == right_tok_) return;
+    right_tok_ = tok;
+    set_tok(right_, tok);
+  }
+  // A hue in front of the left line, or none at all. The left line shifts to make room for it.
+  void set_dot(Tok tok, bool shown = true) {
+    if (dot_ == nullptr) return;
+    set_hidden(dot_, !shown);
+    if (shown) {
+      for (int i = 0; i < T_COUNT; i++) lv_obj_remove_style(dot_, &g_bg[i], 0);
+      lv_obj_add_style(dot_, &g_bg[tok], 0);
+      lv_obj_set_style_bg_opa(dot_, LV_OPA_COVER, 0);
+    }
+    lv_obj_set_x(left_, shown ? 18 : 0);
+    set_breathing(shown && breathing_);
+  }
+  void clear_dot() { set_dot(T_LIFT, false); }
+
+  // The live dot breathes over four seconds. A stale board stops it: nothing about that screen
+  // is happening now.
+  void set_breathing(bool on) {
+    breathing_ = on;
+    if (dot_ == nullptr) return;
+    lv_anim_delete(dot_, anim_bg_opa_cb_);
+    lv_obj_set_style_bg_opa(dot_, LV_OPA_COVER, 0);
+    if (!on) return;
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, dot_);
+    lv_anim_set_exec_cb(&a, anim_bg_opa_cb_);
+    lv_anim_set_duration(&a, 2000);
+    lv_anim_set_playback_duration(&a, 2000);
+    lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_set_values(&a, LV_OPA_COVER, 110);
+    lv_anim_start(&a);
+  }
+
+  lv_obj_t *root() const { return root_; }
+
+ private:
+  static void anim_bg_opa_cb_(void *var, int32_t v) {
+    lv_obj_set_style_bg_opa(static_cast<lv_obj_t *>(var), (lv_opa_t) v, 0);
+  }
+
+  lv_obj_t *root_ = nullptr, *dot_ = nullptr, *left_ = nullptr, *right_ = nullptr;
+  Tok left_tok_ = T_CHALK70, right_tok_ = T_CHALK70;
+  bool breathing_ = false;
+};
+
+// The page indicator along the bottom: one dot per face, the current one a capsule. Hidden until
+// something the household did brings it up, then gone again two seconds later.
+class FaceDots {
+ public:
+  void build(lv_obj_t *parent) {
+    if (root_ != nullptr) return;
+    root_ = mk_obj(parent, 0, 480 - 16 - DOT, 480, DOT);
+    lv_obj_set_style_opa(root_, LV_OPA_TRANSP, 0);
+    set_hidden(root_, true);
+  }
+  void destroy() {
+    root_ = nullptr;   // the parent deleted it with everything else hanging off the host
+    dots_.clear();
+    active_ = 0;
+  }
+
+  void rebuild(size_t count) {
+    if (root_ == nullptr) return;
+    while (dots_.size() > count) {
+      lv_obj_delete(dots_.back());
+      dots_.pop_back();
+    }
+    while (dots_.size() < count) dots_.push_back(mk_panel(root_, 0, 0, DOT, DOT, T_FIELD, LV_RADIUS_CIRCLE));
+    if (active_ >= dots_.size()) active_ = 0;
+    layout_();
+  }
+  void set_active(size_t i) {
+    if (i >= dots_.size()) return;
+    active_ = i;
+    layout_();
+  }
+
+  // Full opacity now, then a fade that starts two seconds from now. Any earlier fade is dropped,
+  // so a second swipe restarts the two seconds rather than fading half way through.
+  void show() {
+    if (root_ == nullptr || dots_.size() < 2) return;
+    lv_anim_delete(root_, anim_opa_cb_);
+    set_hidden(root_, false);
+    lv_obj_set_style_opa(root_, LV_OPA_COVER, 0);
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, root_);
+    lv_anim_set_exec_cb(&a, anim_opa_cb_);
+    lv_anim_set_delay(&a, 2000);
+    lv_anim_set_duration(&a, 400);
+    lv_anim_set_values(&a, LV_OPA_COVER, LV_OPA_TRANSP);
+    lv_anim_start(&a);
+  }
+  void raise() {
+    if (root_ != nullptr) lv_obj_move_foreground(root_);
+  }
+
+ private:
+  static const int DOT = 5, GAP = 8, WIDE = 22;
+
+  void layout_() {
+    int total = 0;
+    for (size_t i = 0; i < dots_.size(); i++) total += (i == active_ ? WIDE : DOT) + (i ? GAP : 0);
+    int x = (480 - total) / 2;
+    for (size_t i = 0; i < dots_.size(); i++) {
+      int w = i == active_ ? WIDE : DOT;
+      lv_obj_set_pos(dots_[i], x, 0);
+      lv_obj_set_width(dots_[i], w);
+      for (int t = 0; t < T_COUNT; t++) lv_obj_remove_style(dots_[i], &g_bg[t], 0);
+      lv_obj_add_style(dots_[i], &g_bg[i == active_ ? T_LIFT : T_FIELD], 0);
+      lv_obj_set_style_bg_opa(dots_[i], LV_OPA_COVER, 0);
+      x += w + GAP;
+    }
+  }
+  static void anim_opa_cb_(void *var, int32_t v) {
+    lv_obj_set_style_opa(static_cast<lv_obj_t *>(var), (lv_opa_t) v, 0);
+  }
+
+  lv_obj_t *root_ = nullptr;
+  std::vector<lv_obj_t *> dots_;
+  size_t active_ = 0;
+};
 
 // ---------------------------------------------------------------- views
 class PageView {
  public:
-  PageView(lv_obj_t *parent, std::string id, char type) : id_(std::move(id)), type_(type) {
-    root_ = mk_obj(parent, 0, 0, 480, 480);
-    lv_obj_set_style_bg_color(root_, lv_color_hex(COL_BG), 0);
-    lv_obj_set_style_bg_opa(root_, LV_OPA_COVER, 0);
+  PageView(lv_obj_t *parent, std::string id, char type)
+      : id_(std::move(id)), type_(type), margin_(type == 'b' ? 36 : 24) {
+    root_ = mk_panel(parent, 0, 0, 480, 480, T_NIGHT, 0);
   }
   PageView(const PageView &) = delete;
   PageView &operator=(const PageView &) = delete;
@@ -274,62 +469,47 @@ class PageView {
 
   // A transient line (Wi-Fi, backend errors) shown where the page has room for it. `problem` is
   // true when the message is something support would want to see; the clock page shows only
-  // those, every other page keeps showing the lot in its footer as it always has.
-  virtual void set_status(const std::string &msg, bool problem) { set_footer_base(msg); }
+  // those, every other page puts the lot on a small line at the foot of the screen. The faces
+  // decide where it belongs from S4 on; until then this is what keeps it visible.
+  virtual void set_status(const std::string &msg, bool problem) {
+    status_text_ = msg;
+    if (status_ == nullptr) return;
+    lv_label_set_text(status_, msg.c_str());
+  }
 
   lv_obj_t *root() const { return root_; }
   const std::string &id() const { return id_; }
   char type() const { return type_; }
 
-  void set_footer_base(const std::string &base) {
-    base_ = base;
-    suffix_.clear();
-    refresh_footer_();
-  }
-  void set_hint(const std::string &hint) {
-    hint_ = hint;
-    refresh_footer_();
-  }
-  // "N/M": the page's own position in the carousel and the number of pages, clock included.
-  void set_counter(size_t n, size_t m) {
-    counter_ = " \xE2\x80\xA2 " + std::to_string(n) + "/" + std::to_string(m);
-    refresh_footer_();
-  }
-  void set_footer_suffix(const std::string &suffix) {
-    if (suffix_ == suffix) return;
-    suffix_ = suffix;
-    refresh_footer_();
-  }
-
  protected:
-  void refresh_footer_() {
-    if (footer_ == nullptr) return;
-    lv_label_set_text(footer_, (base_ + counter_ + hint_ + suffix_).c_str());
-  }
-  // Header shared by the three content templates: title on the left, clock on the right, rule.
+  // The chrome the three content templates share: the strip, with the page title on the left and
+  // the stamp (or, until one arrives, the clock) on the right, and the status line at the foot.
   void build_header_(const char *title) {
-    title_ = mk_label(root_, 14, 12, 340, 32, &lv_font_montserrat_24, COL_WHITE, title);
-    lv_label_set_long_mode(title_, LV_LABEL_LONG_MODE_DOTS);
-    clock_ = mk_label(root_, 326, 12, 140, 32, &lv_font_montserrat_24, COL_WHITE, "--:--");
-    lv_obj_set_style_text_align(clock_, LV_TEXT_ALIGN_RIGHT, 0);
-    mk_rule(root_, 14, 50, 452);
+    strip_.build(root_, margin_);
+    strip_.set_left_font(F(g_fonts.sans600_20));
+    strip_.set_left(title, T_CHALK);
+    status_ = mk_label(root_, margin_, 452, 480 - 2 * margin_, 20, F(g_fonts.mono15), T_CHALK50, "");
+    tracked(status_, 1);
+    lv_label_set_long_mode(status_, LV_LABEL_LONG_MODE_DOTS);
+    if (!status_text_.empty()) lv_label_set_text(status_, status_text_.c_str());
   }
-  void build_footer_() {
-    mk_rule(root_, 14, 436, 452);
-    footer_ = mk_label(root_, 14, 446, 452, 20, &lv_font_montserrat_16, COL_FOOT, "Loading...");
-    lv_label_set_long_mode(footer_, LV_LABEL_LONG_MODE_DOTS);
+  void set_title_(const std::string &title) { strip_.set_left(title, T_CHALK); }
+  // The freshness stamp owns the right of the strip once a document has been through the page.
+  void set_stamp_(uint32_t asof, bool stale) {
+    stamp_ = stamp_text(asof, stale);
+    strip_.set_right(stamp_, T_CHALK70);
   }
   void tick_header_(const esphome::ESPTime &now) {
-    if (clock_ == nullptr) return;
-    lv_label_set_text(clock_, now.is_valid() ? g_nowhm.c_str() : "--:--");
+    if (!stamp_.empty()) return;   // a stamp says more than the time does
+    strip_.set_right(now.is_valid() ? g_nowhm : std::string("--:--"), T_CHALK70);
   }
 
   lv_obj_t *root_ = nullptr;
-  lv_obj_t *title_ = nullptr;
-  lv_obj_t *clock_ = nullptr;
-  lv_obj_t *footer_ = nullptr;
-  std::string id_, base_, counter_, hint_, suffix_;
+  lv_obj_t *status_ = nullptr;
+  StatusStrip strip_;
+  std::string id_, status_text_, stamp_;
   char type_;
+  int margin_;
 };
 
 // ---- clock: always page one, with the date and, when the document carries a weather page, the
@@ -339,20 +519,21 @@ class ClockView : public PageView {
   explicit ClockView(lv_obj_t *parent) : PageView(parent, "__clock", 'c') {
     // The clock font holds digits, a colon, a space and a hyphen and nothing else, so the label
     // starts empty rather than showing "--:--": four missing glyphs would draw as four boxes.
-    time_ = mk_label(root_, 0, 128, 480, 0, font_clock(), COL_WHITE, "");
+    time_ = mk_label(root_, 0, 128, 480, 0, F(g_fonts.clock132), T_CHALK, "");
     lv_obj_set_style_text_align(time_, LV_TEXT_ALIGN_CENTER, 0);
-    waiting_ = mk_label(root_, 0, 176, 480, 36, &lv_font_montserrat_24, COL_DIM, "Waiting for time...");
+    tracked(time_, -8);
+    waiting_ = mk_label(root_, 0, 176, 480, 36, F(g_fonts.sans500_20), T_CHALK70, "Waiting for time...");
     lv_obj_set_style_text_align(waiting_, LV_TEXT_ALIGN_CENTER, 0);
-    date_ = mk_label(root_, 0, 296, 480, 36, &lv_font_montserrat_28, COL_DIM, "");
+    date_ = mk_label(root_, 0, 296, 480, 36, F(g_fonts.sans500_20), T_CHALK70, "");
     lv_obj_set_style_text_align(date_, LV_TEXT_ALIGN_CENTER, 0);
     // Only shown while something is wrong, and only for a problem status or a notice carried by
     // the document: the clock page is what the household looks at, so it stays a clock until
     // support (or the backend) needs a line.
-    problem_ = mk_label(root_, 14, 380, 452, 26, &lv_font_montserrat_20, COL_GREY, "");
+    problem_ = mk_label(root_, 24, 380, 432, 26, F(g_fonts.sans500_18), T_CHALK50, "");
     lv_obj_set_style_text_align(problem_, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(problem_, LV_LABEL_LONG_MODE_DOTS);
     set_hidden(problem_, true);
-    weather_ = mk_label(root_, 14, 424, 452, 28, &lv_font_montserrat_20, COL_AMBER, "");
+    weather_ = mk_label(root_, 24, 424, 432, 28, F(g_fonts.sans500_18), T_CHALK70, "");
     lv_obj_set_style_text_align(weather_, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(weather_, LV_LABEL_LONG_MODE_DOTS);
   }
@@ -421,7 +602,7 @@ class ClockView : public PageView {
  private:
   void refresh_line_() {
     lv_label_set_text(weather_, notice_.empty() ? weather_text_.c_str() : notice_.c_str());
-    lv_obj_set_style_text_color(weather_, lv_color_hex(notice_.empty() ? COL_AMBER : COL_WHITE), 0);
+    set_tok(weather_, notice_.empty() ? T_CHALK70 : T_CHALK);
   }
   // A live problem first, then the document's notice, and nothing at all while a firmware notice
   // is on the line below: an update in progress is not the moment for a billing line.
@@ -443,25 +624,24 @@ class ClockView : public PageView {
 class PairingView : public PageView {
  public:
   explicit PairingView(lv_obj_t *parent) : PageView(parent, "__pair", 'p') {
-    lv_obj_t *t = mk_label(root_, 0, 8, 480, 32, &lv_font_montserrat_28, COL_WHITE, "HallBoard");
+    lv_obj_t *t = mk_label(root_, 0, 8, 480, 32, F(g_fonts.sans600_20), T_CHALK, "HallBoard");
     lv_obj_set_style_text_align(t, LV_TEXT_ALIGN_CENTER, 0);
-    // 12 px of white quiet zone around a 220 px code, centred in the upper half.
-    quiet_ = mk_obj(root_, 118, 46, 244, 244);
-    lv_obj_set_style_bg_color(quiet_, lv_color_hex(COL_WHITE), 0);
-    lv_obj_set_style_bg_opa(quiet_, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(quiet_, 6, 0);
+    // 12 px of chalk quiet zone around a 220 px code, centred in the upper half.
+    quiet_ = mk_panel(root_, 118, 46, 244, 244, T_CHALK, 6);
     qr_ = lv_qrcode_create(quiet_);
     lv_qrcode_set_size(qr_, 220);
-    lv_qrcode_set_dark_color(qr_, lv_color_hex(0x000000));
-    lv_qrcode_set_light_color(qr_, lv_color_hex(COL_WHITE));
+    lv_qrcode_set_dark_color(qr_, col(T_NIGHT));
+    lv_qrcode_set_light_color(qr_, col(T_CHALK));
     lv_obj_set_pos(qr_, 12, 12);
-    code_ = mk_label(root_, 0, 300, 480, 0, font_code(), COL_AMBER, "");
+    code_ = mk_label(root_, 0, 300, 480, 0, F(g_fonts.mono64), T_CHALK, "");
     lv_obj_set_style_text_align(code_, LV_TEXT_ALIGN_CENTER, 0);
-    hint_lbl_ = mk_label(root_, 14, 396, 452, 26, &lv_font_montserrat_20, COL_DIM,
+    tracked(code_, 8);
+    hint_lbl_ = mk_label(root_, 24, 396, 432, 26, F(g_fonts.sans500_18), T_CHALK70,
                          "Scan or enter this code at www.hallboard.co.uk");
     lv_obj_set_style_text_align(hint_lbl_, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(hint_lbl_, LV_LABEL_LONG_MODE_DOTS);
-    wifi_ = mk_label(root_, 14, 430, 452, 24, &lv_font_montserrat_16, COL_FOOT, "");
+    wifi_ = mk_label(root_, 24, 430, 432, 24, F(g_fonts.mono15), T_CHALK50, "");
+    tracked(wifi_, 1);
     lv_obj_set_style_text_align(wifi_, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(wifi_, LV_LABEL_LONG_MODE_DOTS);
     set_code("");
@@ -510,35 +690,37 @@ class PairingView : public PageView {
 // line per pass, each write holding the next transition for 600 ms. That is what makes the steps
 // readable when SNTP finishes before the fetch does, which on a warm boot it usually does.
 //
-// Strings here are ASCII plus the bullet U+2022, the only non-ASCII glyph the built-in Montserrat
-// bitmaps carry: no ellipsis, no em dash. Three dots is three dots.
+// Strings here are ASCII plus the middle dot U+00B7, which is in the text fonts' glyph list: no
+// ellipsis, no em dash. Three dots is three dots.
 class BootView {
  public:
   BootView(lv_obj_t *parent, std::string fw) : fw_(std::move(fw)) {
-    root_ = mk_obj(parent, 0, 0, 480, 480);
-    lv_obj_set_style_bg_color(root_, lv_color_hex(COL_BG), 0);
-    lv_obj_set_style_bg_opa(root_, LV_OPA_COVER, 0);
+    // The boot screen sits on bezel, a shade under the page, so the panel's edge disappears.
+    root_ = mk_panel(parent, 0, 0, 480, 480, T_BEZEL, 0);
     // Swallow touches: nothing behind the overlay should react while it is up, and the gesture
     // must not bubble to the host or a swipe would page the carousel underneath.
     lv_obj_add_flag(root_, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_remove_flag(root_, LV_OBJ_FLAG_GESTURE_BUBBLE);
 
     logo_ = make_logo_(root_);
-    notice_ = mk_label(root_, 14, 198, 452, 26, &lv_font_montserrat_20, COL_WHITE, "");
+    notice_ = mk_label(root_, 24, 198, 432, 26, F(g_fonts.sans500_18), T_CHALK, "");
     lv_obj_set_style_text_align(notice_, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(notice_, LV_LABEL_LONG_MODE_DOTS);
     for (int i = 0; i < STEPS; i++) {
-      steps_[i] = mk_label(root_, 14, 232 + 34 * i, 452, 30, &lv_font_montserrat_24, COL_DIM, "");
+      steps_[i] = mk_label(root_, 24, 232 + 34 * i, 432, 30, F(g_fonts.mono16), T_PENDING, "");
       lv_obj_set_style_text_align(steps_[i], LV_TEXT_ALIGN_CENTER, 0);
+      tracked(steps_[i], 1);
       lv_label_set_long_mode(steps_[i], LV_LABEL_LONG_MODE_DOTS);
     }
-    help_ = mk_label(root_, 24, 372, 432, 54, &lv_font_montserrat_20, COL_AMBER, "");
+    help_ = mk_label(root_, 24, 372, 432, 54, F(g_fonts.sans400_18), T_CHALK70, "");
     lv_obj_set_style_text_align(help_, LV_TEXT_ALIGN_CENTER, 0);
-    detail_ = mk_label(root_, 14, 428, 452, 20, &lv_font_montserrat_16, COL_FOOT, "");
+    detail_ = mk_label(root_, 24, 428, 432, 20, F(g_fonts.mono15), T_CHALK50, "");
     lv_obj_set_style_text_align(detail_, LV_TEXT_ALIGN_CENTER, 0);
+    tracked(detail_, 1);
     lv_label_set_long_mode(detail_, LV_LABEL_LONG_MODE_DOTS);
-    support_ = mk_label(root_, 14, 452, 452, 20, &lv_font_montserrat_16, COL_FOOT, "");
+    support_ = mk_label(root_, 24, 452, 432, 20, F(g_fonts.mono15), T_CHALK50, "");
     lv_obj_set_style_text_align(support_, LV_TEXT_ALIGN_CENTER, 0);
+    tracked(support_, 1);
     lv_label_set_long_mode(support_, LV_LABEL_LONG_MODE_DOTS);
     refresh_support_();
     s_fade_done = false;
@@ -549,9 +731,9 @@ class BootView {
     if (root_ != nullptr) lv_obj_delete(root_);
   }
 
-  // The wordmark stands in for a real logo. One function, one place to replace it with an image.
+  // The mark. Two letters is all the 50 px face carries; S10 puts them on the violet tile.
   static lv_obj_t *make_logo_(lv_obj_t *parent) {
-    lv_obj_t *l = mk_label(parent, 0, 136, 480, 0, font_wordmark(), COL_WHITE, "HallBoard");
+    lv_obj_t *l = mk_label(parent, 0, 136, 480, 0, F(g_fonts.mark50), T_CHALK, "HB");
     lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_opa(l, LV_OPA_TRANSP, 0);
     lv_anim_t a;
@@ -672,23 +854,18 @@ class BootView {
   static const int STEPS = 4;
   static const uint32_t HOLD_MS = 600;
 
-  // Each of these writes exactly one line and holds the next transition for 600 ms.
-  // `ticked` marks a line as done-and-successful: it gets the LV_SYMBOL_OK glyph and green.
+  // Each of these writes exactly one line and holds the next transition for 600 ms. A finished
+  // step is marked by its colour alone: the tick glyph belonged to Montserrat, which the mono
+  // face the steps are set in does not carry.
   void begin_step_(int i, const char *text, bool done = false, bool ticked = false) {
-    lv_obj_set_style_text_color(steps_[i], lv_color_hex(ticked ? COL_GREEN : (done ? COL_WHITE : COL_DIM)), 0);
-    if (ticked) {
-      std::string s = std::string(LV_SYMBOL_OK) + " " + text;
-      lv_label_set_text(steps_[i], s.c_str());
-    } else {
-      lv_label_set_text(steps_[i], text);
-    }
+    set_tok(steps_[i], ticked ? T_OK : (done ? T_CHALK : T_TITLE2));
+    lv_label_set_text(steps_[i], text);
     started_ = true;
     hold_until_ = last_now_ + HOLD_MS;
   }
   void finish_step_(int i, const char *text) {
-    lv_obj_set_style_text_color(steps_[i], lv_color_hex(COL_GREEN), 0);
-    std::string s = std::string(LV_SYMBOL_OK) + " " + text;
-    lv_label_set_text(steps_[i], s.c_str());
+    set_tok(steps_[i], T_OK);
+    lv_label_set_text(steps_[i], text);
     hold_until_ = last_now_ + HOLD_MS;
   }
   void advance_(Step next) {
@@ -706,12 +883,12 @@ class BootView {
     detail_text_ = msg;
     lv_label_set_text(detail_, msg.c_str());
   }
-  // "v1.3.6 • Home Wi-Fi • Hallway", with only the parts that are known yet.
+  // "v1.4.0 · Home Wi-Fi · Hallway", with only the parts that are known yet.
   void refresh_support_() {
     std::string s;
     if (!fw_.empty()) s = "v" + fw_;
-    if (!ssid_.empty()) s += (s.empty() ? "" : " \xE2\x80\xA2 ") + ssid_;
-    if (!name_.empty()) s += (s.empty() ? "" : " \xE2\x80\xA2 ") + name_;
+    if (!ssid_.empty()) s += (s.empty() ? "" : " \xC2\xB7 ") + ssid_;
+    if (!name_.empty()) s += (s.empty() ? "" : " \xC2\xB7 ") + name_;
     lv_label_set_text(support_, s.c_str());
   }
   // Opacity is an inherited style, so fading the root fades every child with it.
@@ -747,7 +924,9 @@ class BootView {
   uint32_t t0_ = 0, hold_until_ = 0, content_at_ = 0, last_now_ = 0;
 };
 
-// ---- board: the departures or arrivals template, geometry unchanged from Phase 1a.
+// ---- board: the departures or arrivals template. The Phase 1a geometry, with the rows dropped
+// eight pixels so the 36 px margin the design gives a board leaves the strip its band. S5 lays
+// the face out properly.
 class BoardView : public PageView {
  public:
   static const int ROWS = 5;
@@ -756,26 +935,28 @@ class BoardView : public PageView {
     build_header_("Train board");
     for (int i = 0; i < ROWS; i++) {
       Row &r = rows_[i];
-      r.card = mk_card(root_, 14, 60 + 74 * i, 452, 68, COL_FOOT);
+      r.card = mk_card(root_, 14, 68 + 74 * i, 452, 68);
       set_hidden(r.card, true);
-      r.time = mk_label(r.card, 14, 5, 80, 34, &lv_font_montserrat_28, COL_AMBER);
-      r.dest = mk_label(r.card, 96, 5, 262, 34, &lv_font_montserrat_28, COL_AMBER);
+      // 84 px of mono 20 holds "08:44" and its tracking without wrapping to a second line.
+      r.time = mk_label(r.card, 14, 5, 84, 34, F(g_fonts.mono20), T_CHALK);
+      tracked(r.time, 1);
+      r.dest = mk_label(r.card, 104, 5, 254, 34, F(g_fonts.sans500_20), T_CHALK);
       lv_label_set_long_mode(r.dest, LV_LABEL_LONG_MODE_DOTS);
-      r.plat = mk_label(r.card, 360, 5, 78, 34, &lv_font_montserrat_28, COL_AMBER);
+      r.plat = mk_label(r.card, 360, 5, 78, 34, F(g_fonts.sans500_20), T_CHALK70);
       lv_obj_set_style_text_align(r.plat, LV_TEXT_ALIGN_RIGHT, 0);
-      r.exp = mk_label(r.card, 14, 41, 78, 22, &lv_font_montserrat_16, COL_AMBER);
-      r.status = mk_label(r.card, 96, 41, 342, 22, &lv_font_montserrat_16, COL_DIM);
+      r.exp = mk_label(r.card, 14, 41, 84, 22, F(g_fonts.mono15), T_CHALK70);
+      tracked(r.exp, 1);
+      r.status = mk_label(r.card, 104, 41, 334, 22, F(g_fonts.mono15), T_CHALK70);
+      tracked(r.status, 1);
       lv_label_set_long_mode(r.status, LV_LABEL_LONG_MODE_DOTS);
     }
-    build_footer_();
-    set_hint(" swipe: next \xE2\x80\xA2 button: edit");
     // A tap anywhere refreshes; the row hit rects sit on top and add the long press. Neither is
     // scrollable, so a horizontal drag still reaches the carousel.
     lv_obj_t *tap = mk_obj(root_, 0, 0, 480, 480);
     lv_obj_add_flag(tap, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(tap, touch_cb_, LV_EVENT_SHORT_CLICKED, nullptr);
     for (int i = 0; i < ROWS; i++) {
-      lv_obj_t *hit = mk_obj(root_, 0, 60 + 74 * i, 480, 74);
+      lv_obj_t *hit = mk_obj(root_, 0, 68 + 74 * i, 480, 74);
       lv_obj_add_flag(hit, LV_OBJ_FLAG_CLICKABLE);
       lv_obj_set_user_data(hit, (void *) (intptr_t) i);
       lv_obj_add_event_cb(hit, touch_cb_, LV_EVENT_SHORT_CLICKED, nullptr);
@@ -790,8 +971,7 @@ class BoardView : public PageView {
     // backend that does not send `module` is rail, which is all there was before 1.4.0.
     module_ = pg.module;
     rail_ = module_.empty() || module_ == "rail";
-    set_hint(rail_ ? " swipe: next \xE2\x80\xA2 button: edit" : " swipe: next");
-    if (!pg.title.empty()) lv_label_set_text(title_, pg.title.c_str());
+    if (!pg.title.empty()) set_title_(pg.title);
     uids_.clear();
     for (int i = 0; i < ROWS; i++) {
       Row &r = rows_[i];
@@ -803,10 +983,9 @@ class BoardView : public PageView {
         // The status string arrives fully composed (delay, coaches, operator, and for an arrivals
         // board the origin's booked and actual departure).
         label_text(r.status, d.status);
-        lv_obj_set_style_text_color(r.status, row_colour(d.colour), 0);
-        lv_obj_set_style_border_color(r.card, row_colour(d.colour == "W" ? "" : d.colour), 0);
+        set_tok(r.status, row_colour(d.colour));
         label_text(r.exp, d.expected);
-        lv_obj_set_style_text_color(r.exp, row_colour(d.colour), 0);
+        set_tok(r.exp, row_colour(d.colour));
         set_hidden(r.card, false);
         uids_.push_back(d.uid);
       } else {
@@ -825,21 +1004,20 @@ class BoardView : public PageView {
                                   : "Nothing expected at this stop";
       lv_label_set_text(rows_[0].dest, missing ? "Board unavailable" : none);
       lv_label_set_text(rows_[0].status, missing ? "Not in the last update from the backend" : waiting);
-      lv_obj_set_style_text_color(rows_[0].status, lv_color_hex(COL_DIM), 0);
-      lv_obj_set_style_border_color(rows_[0].card, lv_color_hex(COL_FOOT), 0);
+      set_tok(rows_[0].status, T_CHALK70);
       set_hidden(rows_[0].card, false);
     }
-    set_footer_base(when_text(pg.asof, pg.stale));
+    set_stamp_(pg.asof, pg.stale);
   }
 
   void tick(esphome::ESPTime now) override { tick_header_(now); }
 
   // Used after the station picker so the header is right before the new document arrives.
   void set_pending(const std::string &title) {
-    lv_label_set_text(title_, title.c_str());
+    set_title_(title);
     uids_.clear();
     for (auto &r : rows_) clear_row_(r);
-    set_footer_base("Loading...");
+    set_stamp_(0, false);
   }
 
   const std::string &uid_at(int i) const {
@@ -891,14 +1069,13 @@ class AgendaView : public PageView {
     lv_obj_set_scroll_dir(list_, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(list_, LV_SCROLLBAR_MODE_AUTO);
     lv_obj_add_event_cb(list_, touch_cb_, LV_EVENT_SHORT_CLICKED, nullptr);
-    build_footer_();
   }
 
   void apply(const Page &pg) override {
     events_ = pg.events;
     asof_ = pg.asof;
     stale_ = pg.stale;
-    if (!pg.title.empty()) lv_label_set_text(title_, pg.title.c_str());
+    if (!pg.title.empty()) set_title_(pg.title);
     render();
   }
 
@@ -925,7 +1102,7 @@ class AgendaView : public PageView {
         if (!last_day.empty()) y += HEAD_GAP - GAP;
         Head &h = ensure_head_(head);
         bool today = it.d == g_today;
-        lv_obj_set_style_text_color(h.text, lv_color_hex(today ? COL_WHITE : COL_HEAD), 0);
+        set_tok(h.text, today ? T_CHALK : T_CHALK50);
         place_label_(h.text, 14, y, 452, upper(it.w) + (today ? "   TODAY" : ""));
         lv_obj_set_pos(h.rule, 14, y + 26);
         set_hidden(h.rule, false);
@@ -937,7 +1114,6 @@ class AgendaView : public PageView {
       Card &c = ensure_card_(card);
       lv_obj_set_pos(c.box, 14, y);
       lv_obj_set_height(c.box, CARD_H);
-      lv_obj_set_style_border_color(c.box, lv_color_hex(it.all_day ? COL_GREEN : COL_AMBER), 0);
       set_hidden(c.box, false);
       if (expanded) {
         // line 1: "start - end" in amber, location right-aligned in grey; line 2: title
@@ -959,11 +1135,10 @@ class AgendaView : public PageView {
     }
     if (shown == 0) {
       Head &h = ensure_head_(0);
-      lv_obj_set_style_text_color(h.text, lv_color_hex(COL_WHITE), 0);
+      set_tok(h.text, T_CHALK);
       place_label_(h.text, 14, 16, 452, asof_ ? "Nothing in the next 7 days" : "Loading...");
     }
-    set_footer_base(when_text(asof_, stale_));
-    set_hint(std::string(" button: ") + (expanded ? "compact" : "expand"));
+    set_stamp_(asof_, stale_);
   }
 
  private:
@@ -977,14 +1152,15 @@ class AgendaView : public PageView {
   Card &ensure_card_(int i) {
     while ((int) cards_.size() <= i) {
       Card c;
-      c.box = mk_card(list_, 14, 0, 452, 40, COL_AMBER);
+      c.box = mk_card(list_, 14, 0, 452, 40);
       set_hidden(c.box, true);
-      c.a = mk_label(c.box, 14, 8, 200, 26, &lv_font_montserrat_20, COL_AMBER);
+      c.a = mk_label(c.box, 14, 8, 200, 26, F(g_fonts.mono16), T_TIME2);
+      tracked(c.a, 1);
       lv_label_set_long_mode(c.a, LV_LABEL_LONG_MODE_DOTS);
-      c.b = mk_label(c.box, 224, 8, 214, 26, &lv_font_montserrat_18, COL_GREY);
+      c.b = mk_label(c.box, 224, 8, 214, 26, F(g_fonts.sans500_16), T_CHALK50);
       lv_label_set_long_mode(c.b, LV_LABEL_LONG_MODE_DOTS);
       lv_obj_set_style_text_align(c.b, LV_TEXT_ALIGN_RIGHT, 0);
-      c.c = mk_label(c.box, 14, 34, 424, 26, &lv_font_montserrat_20, COL_BODY);
+      c.c = mk_label(c.box, 14, 34, 424, 26, F(g_fonts.sans500_18), T_TITLE2);
       lv_label_set_long_mode(c.c, LV_LABEL_LONG_MODE_DOTS);
       cards_.push_back(c);
     }
@@ -993,10 +1169,11 @@ class AgendaView : public PageView {
   Head &ensure_head_(int i) {
     while ((int) heads_.size() <= i) {
       Head h;
-      h.text = mk_label(list_, 14, 0, 452, 24, &lv_font_montserrat_18, COL_HEAD);
+      h.text = mk_label(list_, 14, 0, 452, 24, F(g_fonts.mono15), T_CHALK50);
+      tracked(h.text, 1);
       lv_label_set_long_mode(h.text, LV_LABEL_LONG_MODE_DOTS);
       set_hidden(h.text, true);
-      h.rule = mk_rule(list_, 14, 0, 452, COL_HRULE);
+      h.rule = mk_rule(list_, 14, 0, 452, T_DIVIDER);
       set_hidden(h.rule, true);
       heads_.push_back(h);
     }
@@ -1008,10 +1185,6 @@ class AgendaView : public PageView {
     lv_obj_set_width(o, w);
     lv_label_set_text(o, text.c_str());
     set_hidden(o, text.empty());
-  }
-  static std::string upper(std::string s) {
-    for (auto &c : s) c = toupper((unsigned char) c);
-    return s;
   }
   static void touch_cb_(lv_event_t *e) { emit("TOUCH"); }
 
@@ -1037,11 +1210,10 @@ class GenericView : public PageView {
     lv_obj_set_scroll_dir(list_, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(list_, LV_SCROLLBAR_MODE_AUTO);
     lv_obj_add_event_cb(list_, touch_cb_, LV_EVENT_SHORT_CLICKED, nullptr);
-    build_footer_();
   }
 
   void apply(const Page &pg) override {
-    lv_label_set_text(title_, pg.title.empty() ? "" : pg.title.c_str());
+    set_title_(pg.title);
     for (int i = 0; i < (int) rows_.size(); i++) set_hidden(rows_[i].box, true);
     int n = (int) pg.grows.size();
     if (n > MAX_ROWS) n = MAX_ROWS;
@@ -1054,7 +1226,7 @@ class GenericView : public PageView {
       label_text(r.b, d.b);
       set_hidden(r.box, false);
     }
-    set_footer_base(when_text(pg.asof, pg.stale));
+    set_stamp_(pg.asof, pg.stale);
   }
 
   void tick(esphome::ESPTime now) override { tick_header_(now); }
@@ -1067,19 +1239,17 @@ class GenericView : public PageView {
     while ((int) rows_.size() <= i) {
       int y = 4 + 58 * (int) rows_.size();  // 52 tall with a 6 px gap, first row at page y 60
       Row r;
-      r.box = mk_obj(list_, 14, y, 452, 52);
-      lv_obj_set_style_bg_color(r.box, lv_color_hex(COL_CARD), 0);
-      lv_obj_set_style_bg_opa(r.box, LV_OPA_COVER, 0);
-      lv_obj_set_style_radius(r.box, 10, 0);
+      r.box = mk_panel(list_, 14, y, 452, 52, T_CARD, 16);
       set_hidden(r.box, true);
-      r.icon = mk_label(r.box, 0, 0, 60, 0, font_icon(), COL_AMBER);
+      r.icon = mk_label(r.box, 0, 0, 60, 0, F(g_fonts.icon), T_CHALK70);
       lv_obj_set_style_text_align(r.icon, LV_TEXT_ALIGN_CENTER, 0);
       lv_obj_align(r.icon, LV_ALIGN_LEFT_MID, 10, 0);
-      r.value = mk_label(r.box, 0, 0, 90, 0, &lv_font_montserrat_28, COL_WHITE);
+      r.value = mk_label(r.box, 0, 0, 90, 0, F(g_fonts.sans600_20), T_CHALK);
       lv_obj_align(r.value, LV_ALIGN_LEFT_MID, 78, 0);
-      r.a = mk_label(r.box, 176, 4, 262, 24, &lv_font_montserrat_20, COL_WHITE);
+      r.a = mk_label(r.box, 176, 4, 262, 24, F(g_fonts.sans500_18), T_CHALK);
       lv_label_set_long_mode(r.a, LV_LABEL_LONG_MODE_DOTS);
-      r.b = mk_label(r.box, 176, 28, 262, 20, &lv_font_montserrat_16, COL_DIM);
+      r.b = mk_label(r.box, 176, 28, 262, 20, F(g_fonts.mono15), T_CHALK70);
+      tracked(r.b, 1);
       lv_label_set_long_mode(r.b, LV_LABEL_LONG_MODE_DOTS);
       rows_.push_back(r);
     }
@@ -1098,9 +1268,8 @@ class PageHost {
   // and puts the boot overlay on top of the lot.
   void attach(lv_obj_t *content_root, const std::string &fw) {
     if (host_ != nullptr) return;
-    host_ = mk_obj(content_root, 0, 0, 480, 480);
-    lv_obj_set_style_bg_color(host_, lv_color_hex(COL_BG), 0);
-    lv_obj_set_style_bg_opa(host_, LV_OPA_COVER, 0);
+    init_styles();   // before the first widget, so nothing is built with an unset colour
+    host_ = mk_panel(content_root, 0, 0, 480, 480, T_NIGHT, 0);
     // mk_obj strips CLICKABLE, but the indev hit-test only finds clickable objects: without
     // this flag a drag lands on the screen behind the host and neither scrolling nor
     // gestures ever reach it. The views themselves stay non-clickable so touches fall through.
@@ -1120,6 +1289,7 @@ class PageHost {
     views_.clear();
     views_.emplace_back(new ClockView(host_));
     cur_ = 0;
+    dots_.build(host_);
     boot_.reset(new BootView(host_, fw));
     if (!ssid_.empty()) boot_->on_network(ssid_);   // in case Wi-Fi came up before we were attached
     layout_();
@@ -1133,6 +1303,7 @@ class PageHost {
   void reset() {
     views_.clear();
     boot_.reset();
+    dots_.destroy();
     if (host_ != nullptr) lv_obj_delete(host_);
     host_ = nullptr;
     cur_ = 0;
@@ -1222,6 +1393,7 @@ class PageHost {
         lv_obj_set_x(views_[i]->root(), 0);
         set_hidden(views_[i]->root(), i != cur_);
       }
+      dots_.set_active(cur_);   // right for the next time something brings them up
       return;
     }
     lv_obj_t *out = views_[cur_]->root();
@@ -1232,7 +1404,8 @@ class PageHost {
     lv_anim_t a;
     lv_anim_init(&a);
     lv_anim_set_exec_cb(&a, anim_x_cb_);
-    lv_anim_set_duration(&a, 150);
+    lv_anim_set_duration(&a, 320);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
     lv_anim_set_var(&a, in);
     lv_anim_set_values(&a, -dir * 480, 0);
     lv_anim_start(&a);
@@ -1241,7 +1414,14 @@ class PageHost {
     lv_anim_set_completed_cb(&a, anim_done_cb_);
     lv_anim_start(&a);
 #endif
+    // A page that moved is a page the household just asked for; say where they are.
+    dots_.set_active(cur_);
+    dots_.show();
   }
+
+  // A touch anywhere brings the page indicator up, as a swipe does. hallboard.yaml's TOUCH
+  // branch calls this.
+  void touch() { dots_.show(); }
 
   // One step around the carousel, wrapping, for the gesture fallback and the button.
   void step(int delta) {
@@ -1256,6 +1436,7 @@ class PageHost {
     if (now.is_valid()) {
       g_nowhm = now.strftime("%H:%M");
       g_today = now.strftime("%Y%m%d");
+      g_now_epoch = (uint32_t) now.timestamp;
       if (boot_) boot_->on_time_valid();
     }
     for (auto &v : views_) v->tick(now);
@@ -1359,7 +1540,7 @@ class PageHost {
     return std::unique_ptr<PageView>(new GenericView(host_, pg.id));
   }
 
-  // Positions, stacking order and footer counters after any change to the page list.
+  // Positions, stacking order and the page indicator after any change to the page list.
   void layout_() {
     for (size_t i = 0; i < views_.size(); i++) {
       lv_obj_t *o = views_[i]->root();
@@ -1370,9 +1551,11 @@ class PageHost {
       lv_obj_set_pos(o, 0, 0);
       set_hidden(o, i != cur_);
 #endif
-      views_[i]->set_counter(i + 1, views_.size());
     }
-    raise_boot_();   // re-indexing the views has just put them above the overlay
+    dots_.rebuild(views_.size());
+    dots_.set_active(cur_ < views_.size() ? cur_ : 0);
+    dots_.raise();   // re-indexing the views has just put them above the dots
+    raise_boot_();   // and the overlay goes above the lot
   }
 
   void raise_boot_() {
@@ -1427,6 +1610,8 @@ class PageHost {
 
   lv_obj_t *host_ = nullptr;
   std::vector<std::unique_ptr<PageView>> views_;
+  // The page indicator is not a page either: it floats above them all and fades on its own.
+  FaceDots dots_;
   // The boot overlay is never a page: it is owned here and destroyed once, on its own.
   std::unique_ptr<BootView> boot_;
   std::string ssid_;

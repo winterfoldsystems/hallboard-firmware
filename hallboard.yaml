@@ -31,6 +31,7 @@ esphome:
   name: hallboard
   friendly_name: HallBoard
   includes:
+    - hb_tokens.h
     - hb_ui.h
     - hb_parse.h
     - trainboard_logic.h
@@ -51,10 +52,22 @@ esphome:
           if (id(cur_board) < 0) id(cur_board) = 0;
           // Fonts the runtime pages draw with, the agenda's saved layout, and the way a widget
           // posts an event back to this script. Then build the carousel, clock page first.
-          hb::g_fonts.clock = id(clock_font)->get_lv_font();
-          hb::g_fonts.code = id(pair_font)->get_lv_font();
+          hb::g_fonts.clock132 = id(fig600_132)->get_lv_font();
+          hb::g_fonts.hero88 = id(fig600_88)->get_lv_font();
+          hb::g_fonts.sans600_30 = id(fig600_30)->get_lv_font();
+          hb::g_fonts.sans600_20 = id(fig600_20)->get_lv_font();
+          hb::g_fonts.sans500_22 = id(fig500_22)->get_lv_font();
+          hb::g_fonts.sans500_20 = id(fig500_20)->get_lv_font();
+          hb::g_fonts.sans500_18 = id(fig500_18)->get_lv_font();
+          hb::g_fonts.sans500_16 = id(fig500_16)->get_lv_font();
+          hb::g_fonts.sans400_18 = id(fig400_18)->get_lv_font();
+          hb::g_fonts.mark50 = id(fig700_50)->get_lv_font();
+          hb::g_fonts.mono64 = id(mono400_64)->get_lv_font();
+          hb::g_fonts.mono20 = id(mono400_20)->get_lv_font();
+          hb::g_fonts.mono16 = id(mono400_16)->get_lv_font();
+          hb::g_fonts.mono15 = id(mono400_15)->get_lv_font();
+          hb::g_fonts.mono14 = id(mono400_14)->get_lv_font();
           hb::g_fonts.icon = id(icon_font)->get_lv_font();
-          hb::g_fonts.wordmark = id(wordmark_font)->get_lv_font();
           hb::g_agenda_expanded = id(cal_expanded);
           hb::g_event = [](const std::string &msg) { id(ev).execute(msg); };
           hb::g_host.attach(id(content_page)->obj, "${fw_version}");
@@ -97,7 +110,7 @@ esphome:
           if (wifi::global_wifi_component->has_sta()) {
             hb::g_host.set_status("Connecting to Wi-Fi...");
           } else {
-            hb::g_host.set_status("No Wi-Fi configured • hold the side button", true);
+            hb::g_host.set_status("No Wi-Fi configured · hold the side button", true);
             id(ev).execute("BUTTONLONG");
           }
           // A factory reset is a very long hold; the 0.7 to 6 s band in hardware.yaml opens Wi-Fi
@@ -175,7 +188,7 @@ wifi:
         id(next_poll_at) = millis();
   on_disconnect:
     - lambda: |-
-        hb::g_host.set_status("Wi-Fi disconnected • hold the side button for Wi-Fi setup", true);
+        hb::g_host.set_status("Wi-Fi disconnected · hold the side button for Wi-Fi setup", true);
 
 improv_serial:
 
@@ -319,8 +332,6 @@ script:
             if (id(last_manual_refresh) && millis() - id(last_manual_refresh) < 15000) return;
             id(last_manual_refresh) = millis();
             id(next_poll_at) = millis();
-            auto* v = hb::g_host.current_view();
-            if (v != nullptr) v->set_footer_suffix(" • updating");
           };
 
           lv_obj_t* nb[] = {id(net0), id(net1), id(net2), id(net3), id(net4), id(net5), id(net6)};
@@ -420,6 +431,7 @@ script:
             hb::g_host.step(msg == "SWIPE|L" ? 1 : -1);
           } else if (msg == "TOUCH") {
             // A tap pulls a fresh screen document and lifts the backlight out of night dimming.
+            hb::g_host.touch();
             id(night_lift_until) = millis() + 120000;
             id(apply_brightness).execute();
             manual_refresh();

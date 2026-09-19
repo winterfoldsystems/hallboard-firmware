@@ -5,10 +5,10 @@ lvgl:
   displays: [sensecap_display]
   touchscreens: [sensecap_touchscreen]
   buffer_size: 25%
-  default_font: montserrat_24
+  default_font: fig500_18
   theme:
     label:
-      text_color: 0xFFB000
+      text_color: 0xF5F4F9
   pages:
     # Page 0: every content page. ui.yaml only supplies the empty canvas; hb_ui.h creates the
     # clock, pairing, board, agenda and generic pages inside it at runtime from the screen
@@ -19,20 +19,27 @@ lvgl:
       scrollable: false
       pad_all: 0
       widgets:
-        # Anchors. A built-in Montserrat bitmap is only compiled in when some widget references
-        # it; referencing an esphome `font:` here is what defines USE_LVGL_FONT and so gives
-        # Font::get_lv_font(); and the qrcode widget is what turns on LV_USE_QRCODE. hb_ui.h then
-        # uses &lv_font_montserrat_NN, id(...)->get_lv_font() and lv_qrcode_create directly.
-        # All hidden, none ever drawn.
-        - label: {id: anchor_16, x: 0, y: 0, width: 1, height: 1, text: "", text_font: montserrat_16, hidden: true}
-        - label: {id: anchor_18, x: 0, y: 0, width: 1, height: 1, text: "", text_font: montserrat_18, hidden: true}
-        - label: {id: anchor_20, x: 0, y: 0, width: 1, height: 1, text: "", text_font: montserrat_20, hidden: true}
-        - label: {id: anchor_24, x: 0, y: 0, width: 1, height: 1, text: "", text_font: montserrat_24, hidden: true}
-        - label: {id: anchor_28, x: 0, y: 0, width: 1, height: 1, text: "", text_font: montserrat_28, hidden: true}
-        - label: {id: anchor_clock, x: 0, y: 0, width: 1, height: 1, text: "", text_font: clock_font, hidden: true}
-        - label: {id: anchor_pair, x: 0, y: 0, width: 1, height: 1, text: "", text_font: pair_font, hidden: true}
+        # Anchors. Referencing an esphome `font:` here is what defines USE_LVGL_FONT and so gives
+        # Font::get_lv_font(); the qrcode widget is what turns on LV_USE_QRCODE. hb_ui.h then
+        # uses id(...)->get_lv_font() and lv_qrcode_create directly. One label per font id, all
+        # hidden, none ever drawn. The built-in Montserrat bitmaps need no anchor here: the
+        # static pages below still reference them by name.
+        - label: {id: anchor_fig600_132, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig600_132, hidden: true}
+        - label: {id: anchor_fig600_88, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig600_88, hidden: true}
+        - label: {id: anchor_fig600_30, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig600_30, hidden: true}
+        - label: {id: anchor_fig600_20, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig600_20, hidden: true}
+        - label: {id: anchor_fig500_22, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig500_22, hidden: true}
+        - label: {id: anchor_fig500_20, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig500_20, hidden: true}
+        - label: {id: anchor_fig500_18, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig500_18, hidden: true}
+        - label: {id: anchor_fig500_16, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig500_16, hidden: true}
+        - label: {id: anchor_fig400_18, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig400_18, hidden: true}
+        - label: {id: anchor_fig700_50, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig700_50, hidden: true}
+        - label: {id: anchor_mono400_64, x: 0, y: 0, width: 1, height: 1, text: "", text_font: mono400_64, hidden: true}
+        - label: {id: anchor_mono400_20, x: 0, y: 0, width: 1, height: 1, text: "", text_font: mono400_20, hidden: true}
+        - label: {id: anchor_mono400_16, x: 0, y: 0, width: 1, height: 1, text: "", text_font: mono400_16, hidden: true}
+        - label: {id: anchor_mono400_15, x: 0, y: 0, width: 1, height: 1, text: "", text_font: mono400_15, hidden: true}
+        - label: {id: anchor_mono400_14, x: 0, y: 0, width: 1, height: 1, text: "", text_font: mono400_14, hidden: true}
         - label: {id: anchor_icon, x: 0, y: 0, width: 1, height: 1, text: "", text_font: icon_font, hidden: true}
-        - label: {id: anchor_wordmark, x: 0, y: 0, width: 1, height: 1, text: "", text_font: wordmark_font, hidden: true}
         - qrcode: {id: anchor_qr, x: 0, y: 0, size: 20, text: "", hidden: true}
     - id: detail_page
       bg_color: 0x000000
@@ -616,31 +623,97 @@ lvgl:
             textarea: pw_ta
             mode: TEXT_LOWER
 
-# Fonts beyond LVGL's built-in Montserrat bitmaps. Montserrat Medium comes from Google Fonts at
-# build time; the Material Design Icons webfont is checked in under fonts/ with its licence.
+# The design system's type scale. Figtree carries the text, IBM Plex Mono the times, codes and
+# meta lines. Both come from Google Fonts at build time: `gfonts://Family@weight` asks the CSS
+# API for that weight and the API answers with a static instance of the variable font, so 500,
+# 600 and 700 are three different files and not one file rendered three ways. A family with
+# spaces in its name is written with plus signs, as the CSS API wants it.
+# The Material Design Icons webfont is checked in under fonts/ with its licence; S14 drops it.
+#
+# Every entry has an explicit glyph list. The text sizes share one: printable ASCII plus the
+# degree sign, the middle dot the stamps separate with, both dashes and an ellipsis.
 font:
-  # The clock page. Digits and a colon, plus a space and a hyphen as a safety so a stray
-  # separator can never draw as a missing-glyph box at 120 px.
-  - file: "gfonts://Montserrat@medium"
-    id: clock_font
-    size: 120
+  # The clock face. Digits and a colon and nothing else at 132 px.
+  - file: "gfonts://Figtree@600"
+    id: fig600_132
+    size: 132
     bpp: 4
-    glyphs: [" -0123456789:"]
-  # The boot wordmark. A stand-in for a real logo: only the letters "HallBoard" needs.
-  - file: "gfonts://Montserrat@medium"
-    id: wordmark_font
-    size: 56
+    glyphs: ["0123456789:"]
+  # The temperature hero on the weather face: digits, the degree sign and a minus.
+  - file: "gfonts://Figtree@600"
+    id: fig600_88
+    size: 88
     bpp: 4
-    glyphs: ["HalBord"]
-  # The pairing code. The pairing alphabet has no I, L, O or S (docs/api-v1.md). 64 px is the
-  # largest size at which a six-character code plus its separating space always fits 480 px.
-  - file: "gfonts://Montserrat@medium"
-    id: pair_font
+    glyphs: ["0123456789°-"]
+  - file: "gfonts://Figtree@600"
+    id: fig600_30
+    size: 30
+    bpp: 4
+    glyphs: &text_glyphs
+      - " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
+      - "°·–—…"
+  - file: "gfonts://Figtree@600"
+    id: fig600_20
+    size: 20
+    bpp: 4
+    glyphs: *text_glyphs
+  - file: "gfonts://Figtree@500"
+    id: fig500_22
+    size: 22
+    bpp: 4
+    glyphs: *text_glyphs
+  - file: "gfonts://Figtree@500"
+    id: fig500_20
+    size: 20
+    bpp: 4
+    glyphs: *text_glyphs
+  - file: "gfonts://Figtree@500"
+    id: fig500_18
+    size: 18
+    bpp: 4
+    glyphs: *text_glyphs
+  - file: "gfonts://Figtree@500"
+    id: fig500_16
+    size: 16
+    bpp: 4
+    glyphs: *text_glyphs
+  - file: "gfonts://Figtree@400"
+    id: fig400_18
+    size: 18
+    bpp: 4
+    glyphs: *text_glyphs
+  # The mark. Two letters, and the tile behind them is drawn rather than set.
+  - file: "gfonts://Figtree@700"
+    id: fig700_50
+    size: 50
+    bpp: 4
+    glyphs: ["HB"]
+  # The pairing code. The pairing alphabet has no I, L, O or S (docs/api-v1.md).
+  - file: "gfonts://IBM+Plex+Mono@400"
+    id: mono400_64
     size: 64
     bpp: 4
-    glyphs:
-      - " 0123456789"
-      - "ABCDEFGHJKMNPQRTUVWXYZ"
+    glyphs: [" 0123456789ABCDEFGHJKMNPQRTUVWXYZ"]
+  - file: "gfonts://IBM+Plex+Mono@400"
+    id: mono400_20
+    size: 20
+    bpp: 4
+    glyphs: *text_glyphs
+  - file: "gfonts://IBM+Plex+Mono@400"
+    id: mono400_16
+    size: 16
+    bpp: 4
+    glyphs: *text_glyphs
+  - file: "gfonts://IBM+Plex+Mono@400"
+    id: mono400_15
+    size: 15
+    bpp: 4
+    glyphs: *text_glyphs
+  - file: "gfonts://IBM+Plex+Mono@400"
+    id: mono400_14
+    size: 14
+    bpp: 4
+    glyphs: *text_glyphs
   # The twenty icons a generic page may name. See the table in hb_ui.h for the name of each.
   - file: "fonts/materialdesignicons-webfont.ttf"
     id: icon_font

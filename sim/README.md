@@ -20,7 +20,7 @@ python3 firmware/sim/tools/check_glyphs.py     # every character drawn has a gly
 ```
 
 The first `make png` clones LVGL at the tag the device build uses (v9.5.0) into `lvgl/` and
-downloads three fonts into `fonts/`, checked against `fonts.sha256`. Both directories are
+downloads five fonts into `fonts/`, checked against `fonts.sha256`. Both directories are
 gitignored, and those two fetches are the only network anything here does; rendering talks to
 nothing. Building all of LVGL takes a couple of minutes once, and is incremental after that.
 
@@ -36,6 +36,7 @@ the UI changes and not otherwise.
 | `clock-problem` | The same with a live problem status, which wins over a notice |
 | `clock-waiting-time` | SNTP never answered: no time, no date, "Waiting for time..." |
 | `board-live` | A rail departures board, five rows, one delayed |
+| `dots` | The same board a moment after a swipe, with the page indicator up |
 | `board-stale` | An arrivals board being served from the backend's last good data |
 | `board-empty` | A board with no departures in the window |
 | `board-unavailable` | A board the backend could not build at all (`asof` 0) |
@@ -62,12 +63,14 @@ Adding one is a row in the `SCENARIOS` table in `main.cpp` and, usually, a fixtu
   detail page, the station picker, the Wi-Fi list, the password page and the keyboard are declared
   in `ui.yaml` and belong to ESPHome, so they do not appear.
 - **Touch.** There is no input device. Scenarios call `show()` and `step()` directly, so nothing
-  exercises the swipe gesture, the long press on a row or the scrolling of the agenda.
-- **Font rasterisation.** ESPHome rasterises the four custom fonts at build time with its own
-  renderer; here TinyTTF does it at run time. Weights and hinting differ slightly, so the custom
-  sizes (the 120 px clock, the 56 px wordmark, the 64 px pairing code, the 48 px icons) are a
-  little lighter on screen than on the board. The built-in Montserrat sizes are the same bitmaps
-  in both. Google Fonts publishes Montserrat and Figtree as variable fonts only, and TinyTTF is
-  stb_truetype underneath, which ignores the weight axis and renders the default instance.
+  exercises the swipe gesture, the long press on a row or the scrolling of the agenda. The `dots`
+  scenario reaches the page indicator through `step()`, which is the same call the gesture makes.
+- **Font rasterisation.** ESPHome rasterises every `font:` entry at build time with its own
+  renderer; here TinyTTF does it at run time. Both start from the same outlines: `gfonts://` asks
+  the Google CSS API for a weight and gets a static instance of the family back, and the Makefile
+  downloads the matching static files (Figtree Regular, Medium, SemiBold and Bold from the
+  family's own repository, IBM Plex Mono Regular from Google Fonts). TinyTTF is stb_truetype
+  underneath and would ignore a variable font's weight axis, which is why no `[wght]` file is
+  fetched. Hinting still differs, so the glyphs are a shade lighter on screen than on the board.
 - **The panel.** Colours go through RGB565 as they do on the board, but nothing models the
   backlight, the night dimming window or the panel's own gamma.

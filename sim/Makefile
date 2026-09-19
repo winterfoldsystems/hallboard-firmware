@@ -16,6 +16,9 @@ LVGL_TAG := v9.5.0
 
 # Google Fonts, which is where ui.yaml's gfonts:// files come from too.
 GF := https://raw.githubusercontent.com/google/fonts/main
+# Figtree's own repository, which is where its static weights live. google/fonts carries the
+# variable font only, and TinyTTF is stb_truetype underneath, which ignores the weight axis.
+FIGTREE := https://raw.githubusercontent.com/erikdkennedy/figtree/master/fonts/ttf
 
 CC ?= clang
 CXX ?= clang++
@@ -41,7 +44,8 @@ NPROC := $(shell (nproc || sysctl -n hw.ncpu) 2>/dev/null || echo 4)
 LVGL_SRC := $(shell find lvgl/src -name '*.c' -not -path 'lvgl/src/drivers/*' 2>/dev/null)
 LVGL_OBJ := $(LVGL_SRC:%.c=$(BUILD)/%.o)
 
-FONT_FILES := fonts/Montserrat.ttf fonts/Figtree.ttf fonts/IBMPlexMono-Regular.ttf
+FIGTREE_WEIGHTS := Regular Medium SemiBold Bold
+FONT_FILES := $(FIGTREE_WEIGHTS:%=fonts/Figtree-%.ttf) fonts/IBMPlexMono-Regular.ttf
 
 .PHONY: all png run lvgl fonts clean list
 all: png
@@ -51,16 +55,11 @@ lvgl: lvgl/lv_version.h
 lvgl/lv_version.h:
 	git clone --depth 1 --branch $(LVGL_TAG) $(LVGL_REPO) lvgl
 
-# Montserrat is what the firmware uses today and what the four custom sizes are rasterised from
-# until S2. Figtree and IBM Plex Mono are fetched now so the S2 switch is a change to the font
-# table in main.cpp and nothing else. Google Fonts ships these two families as variable fonts
-# only, so there is one file per family rather than one per weight.
-fonts/Montserrat.ttf:
+# One file per weight, matching what the Google CSS API hands ESPHome for each `gfonts://`
+# entry in ui.yaml. LVGL's built-in Montserrat bitmaps are compiled C and need no TTF here.
+fonts/Figtree-%.ttf:
 	@mkdir -p fonts
-	curl -fsSL -o $@ "$(GF)/ofl/montserrat/Montserrat%5Bwght%5D.ttf"
-fonts/Figtree.ttf:
-	@mkdir -p fonts
-	curl -fsSL -o $@ "$(GF)/ofl/figtree/Figtree%5Bwght%5D.ttf"
+	curl -fsSL -o $@ "$(FIGTREE)/Figtree-$*.ttf"
 fonts/IBMPlexMono-Regular.ttf:
 	@mkdir -p fonts
 	curl -fsSL -o $@ "$(GF)/ofl/ibmplexmono/IBMPlexMono-Regular.ttf"
