@@ -1206,7 +1206,7 @@ class BoardView : public PageView {
     // `module` is rail, which is all there was before 1.4.0.
     module_ = pg.module;
     // "FARNCOMBE TO WATERLOO", "ARRIVALS AT FARNCOMBE", a stop's name: the backend's title as
-    // it is, at mono 15 the strip has room for all forty characters of it.
+    // it is. The strip has room for about thirty capitals and puts the dots after them.
     strip_.set_left(upper(pg.title), T_TRANSIT);
     show_problem_("");   // a document is the answer to whatever the last problem was about
     uids_.clear();
@@ -1224,8 +1224,14 @@ class BoardView : public PageView {
       label_text(r.plat, d.plat);
       // The status string arrives fully composed (delay, coaches, operator, and for an arrivals
       // board the origin's booked and actual departure). `e` is the expected time on rail and
-      // the wait on TfL, and goes in front of it.
-      label_text(r.status, d.expected.empty() ? d.status : d.expected + " \xC2\xB7 " + d.status);
+      // the wait on TfL. A time goes under the booked one it revises, in the status's colour; a
+      // wait ("3 min", "Due") is not a time and stays in front of the status.
+      bool revised = d.expected.size() == 5 && d.expected[2] == ':';
+      label_text(r.expected, revised ? d.expected : "");
+      set_hidden(r.expected, !revised);
+      set_tok(r.expected, row_colour(d.colour));
+      label_text(r.status, d.expected.empty() || revised ? d.status
+                                                         : d.expected + " \xC2\xB7 " + d.status);
       set_tok(r.status, row_colour(d.colour));
       // A cancelled service is dimmed where it stands. It is never dropped or moved: the
       // household needs to see that the train they were going to catch is not running.
@@ -1266,6 +1272,7 @@ class BoardView : public PageView {
 
   struct Row {
     lv_obj_t *box = nullptr, *time = nullptr, *dest = nullptr, *status = nullptr, *plat = nullptr;
+    lv_obj_t *expected = nullptr;
   };
 
   // Columns inside a row, measured from the row's own left edge: 16 px of padding, a 72 px time,
@@ -1293,6 +1300,10 @@ class BoardView : public PageView {
     r.time = mk_label(r.box, rpad, pad, time_w, dest_h,
                       F(first ? g_fonts.sans600_24 : g_fonts.sans500_22),
                       first ? T_CHALK : T_TIME2);
+    // The revised time of a late train, under the booked one and on the status's line.
+    r.expected = mk_label(r.box, rpad, pad + dest_h + 2, time_w, status_h, F(g_fonts.sans500_18),
+                          T_CHALK70);
+    set_hidden(r.expected, true);
     r.dest = mk_label(r.box, text_x, pad, plat_x - 14 - text_x, dest_h,
                       F(first ? g_fonts.sans600_24 : g_fonts.sans500_22),
                       first ? T_CHALK : T_TITLE2);
