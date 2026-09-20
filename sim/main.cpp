@@ -33,7 +33,7 @@
 namespace {
 
 const int W = 480, H = 480;
-const char *FW = "1.4.3";
+const char *FW = "1.4.4";
 
 // 2026-09-18 08:41:07 Europe/London. Chosen so the agenda fixture has a spent event, a live one
 // and two later days, and so every clock reads 08:41.
