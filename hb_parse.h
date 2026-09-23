@@ -112,8 +112,9 @@ inline bool parse_screen(const std::string &body, hb::Document &out) {
       for (JsonObject rw : rows) {
         if (p.grows.size() >= MAX_GROWS) break;
         hb::GenericRow r;
-        // Parsed and ignored: a backend older than 1.4.0 names an icon, and no face draws one
-        // any more. Still read so a document carrying one is not treated as malformed.
+        // Every face but the weather one ignores this: a backend older than 1.4.0 named an icon
+        // for a reminder row and none of those draw one, but the weather page's first row (the
+        // hero) reuses this same field for current conditions, one of the names hb_icons.h knows.
         r.icon = jstr(rw["i"], 12);
         r.value = jstr(rw["v"], 8);
         r.a = jstr(rw["a"], 40);
@@ -128,12 +129,31 @@ inline bool parse_screen(const std::string &body, hb::Document &out) {
       p.feels = jstr(pg["feels"], 6);
       p.head = jstr(pg["head"], 24);
       p.sent = jstr(pg["sent"], 64);
+      // Current conditions and wind, for the clock's one-line summary under the numerals. Both
+      // optional, both absent on a backend older than this field.
+      p.cond = jstr(pg["cond"], 24);
+      p.wind = jstr(pg["wind"], 16);
+      // The weather face's wind and rain cards. Each is its own optional field, not a struct, so
+      // an older backend (or a provider with nothing for one of them) can send some and not
+      // others: `wdir` and `gust` in particular are routinely absent.
+      p.wdir = jstr(pg["wdir"], 4);
+      p.wspd = jstr(pg["wspd"], 4);
+      p.gust = jstr(pg["gust"], 4);
+      p.rday = -1;
+      if (pg["rday"].is<int>()) {
+        int rd = pg["rday"].as<int>();
+        p.rday = rd < 0 ? 0 : (rd > 100 ? 100 : rd);
+      }
       JsonArray hours = pg["hours"].as<JsonArray>();
       for (JsonObject hr : hours) {
         if (p.hours.size() >= MAX_HOURS) break;
         hb::HourSlot h;
         h.h = jstr(hr["h"], 2);
         h.t = jstr(hr["t"], 6);
+        // One of hb_icons.h's names (sun, partly, cloud, rain, pour, snow, fog, storm, wind,
+        // night). Optional: absent on a backend older than the hourly icon row, in which case
+        // SkyView draws no icon row at all rather than a strip of empty cells.
+        h.i = jstr(hr["i"], 8);
         int r = hr["r"].is<int>() ? hr["r"].as<int>() : 0;
         h.r = r < 0 ? 0 : (r > 100 ? 100 : r);
         p.hours.push_back(std::move(h));

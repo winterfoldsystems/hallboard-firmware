@@ -1,8 +1,9 @@
 // The HallBoard design system's device palette, as LVGL styles.
 //
 // Every colour the runtime UI draws is one of the tokens below. Nothing in hb_ui.h names a hex
-// value: a widget adds the shared text or background style for its token, so switching the whole
-// board to the night palette is one apply_palette() call and not a walk over the object tree.
+// value: a widget adds the shared text, background or (for an icon) image-recolour style for its
+// token, so switching the whole board to the night palette is one apply_palette() call and not a
+// walk over the object tree.
 //
 // The hex values are the sRGB of the design's OKLCH colours (see the plan's "Design values to
 // port"). Module hues are for text, dots and bars only; they are never a fill.
@@ -116,11 +117,14 @@ inline constexpr Palette NIGHT = {{
     0xFFFFFF,  // T_WHITE
 }};
 
-// One text style and one background style per token, shared by every widget that uses it. A
-// widget adds the style rather than setting a local colour, which is what makes apply_palette()
-// enough to repaint the board.
+// One text style, one background style and one image-recolour style per token, shared by every
+// widget that uses it. A widget adds the style rather than setting a local colour, which is what
+// makes apply_palette() enough to repaint the board. g_img is for lv_image: every icon on the
+// board is an A8 alpha mask (firmware/hb_icons.h), drawn in no colour of its own, so the token's
+// image_recolor is the only colour it ever has.
 inline lv_style_t g_text[T_COUNT];
 inline lv_style_t g_bg[T_COUNT];
+inline lv_style_t g_img[T_COUNT];
 inline const Palette *g_palette = &DAY;
 inline bool g_styles_ready = false;
 
@@ -132,6 +136,8 @@ inline void apply_palette(const Palette &p) {
     lv_style_set_text_color(&g_text[i], lv_color_hex(p.rgb[i]));
     lv_style_set_bg_color(&g_bg[i], lv_color_hex(p.rgb[i]));
     lv_style_set_bg_opa(&g_bg[i], LV_OPA_COVER);
+    lv_style_set_image_recolor(&g_img[i], lv_color_hex(p.rgb[i]));
+    lv_style_set_image_recolor_opa(&g_img[i], LV_OPA_COVER);
   }
   lv_obj_report_style_change(nullptr);
 }
@@ -142,6 +148,7 @@ inline void init_styles() {
   for (int i = 0; i < T_COUNT; i++) {
     lv_style_init(&g_text[i]);
     lv_style_init(&g_bg[i]);
+    lv_style_init(&g_img[i]);
   }
   g_styles_ready = true;
   apply_palette(*g_palette);

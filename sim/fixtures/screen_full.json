@@ -38,15 +38,16 @@
        {"i": "night", "v": "12", "a": "22:00", "b": "Clear"},
        {"i": "sun", "v": "21", "a": "Sat", "b": "Sunny . high 21 . low 12"}
      ],
-     "place": "Godalming", "temp": "14", "feels": "12",
+     "place": "Godalming", "temp": "14", "feels": "12", "cond": "Partly cloudy", "wind": "SW 12 mph",
+     "wdir": "SW", "wspd": "12", "gust": "24", "rday": 60,
      "head": "Cloudy, then rain", "sent": "Take the umbrella, rain from about four.",
      "hours": [
-       {"h": "10", "t": "15", "r": 10},
-       {"h": "12", "t": "17", "r": 20},
-       {"h": "14", "t": "18", "r": 35},
-       {"h": "16", "t": "18", "r": 60},
-       {"h": "18", "t": "16", "r": 80},
-       {"h": "20", "t": "14", "r": 40}
+       {"h": "10", "t": "15", "r": 10, "i": "partly"},
+       {"h": "12", "t": "17", "r": 20, "i": "cloud"},
+       {"h": "14", "t": "18", "r": 35, "i": "rain"},
+       {"h": "16", "t": "18", "r": 60, "i": "pour"},
+       {"h": "18", "t": "16", "r": 80, "i": "rain"},
+       {"h": "20", "t": "14", "r": 40, "i": "partly"}
      ]},
     {"type": "generic", "id": "dm_000004", "module": "reminders", "title": "To-do", "asof": 1789717080, "stale": false,
      "rows": [

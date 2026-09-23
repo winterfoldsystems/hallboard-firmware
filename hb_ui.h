@@ -15,8 +15,10 @@
 #define HB_CAROUSEL 0
 
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <memory>
@@ -28,6 +30,8 @@
 #include "esphome/core/log.h"
 #include "esphome/core/time.h"
 #include "hb_copy.h"
+#include "hb_icons.h"
+#include "hb_temp_scale.h"
 #include "hb_tokens.h"
 
 namespace hb {
@@ -47,17 +51,19 @@ struct AgendaEvent {
   bool all_day = false;
 };
 
-// One row of a generic page: a large value and two text lines. `icon` is still parsed, because a
-// backend older than 1.4.0 sends one, and nothing draws it: the icon font went with S14 and the
-// faces say it in type instead.
+// One row of a generic page: a large value and two text lines. `icon` is drawn by exactly one
+// face: SkyView reads the weather page's first row's `icon` for the current-conditions icon on
+// its "now" card. Every other face's rows carry it (a backend older than 1.4.0 always sends one)
+// and never draw it, the reminders list saying its own state in type instead.
 struct GenericRow {
   std::string icon, value, a, b;
 };
 
 // One two-hourly slot of the weather page's strip: the hour, the temperature at it and the
-// chance of rain as a percentage.
+// chance of rain as a percentage. `i` is one of hb_icons.h's names (sun, partly, cloud, rain,
+// pour, snow, fog, storm, wind, night), optional: empty when the backend has nothing for it.
 struct HourSlot {
-  std::string h, t;
+  std::string h, t, i;
   int r = 0;
 };
 
@@ -74,8 +80,12 @@ struct Page {
   std::vector<BoardRow> rows;
   std::vector<AgendaEvent> events;
   std::vector<GenericRow> grows;
-  // The weather face's own fields, all optional. S7 draws them; the clock uses `temp`.
-  std::string place, temp, feels, head, sent;
+  // The weather face's own fields, all optional. SkyView draws them; the clock uses `temp`,
+  // `cond` and `wind` for its own one-line summary. `wdir`/`wspd`/`gust` are the wind card's own
+  // (current conditions' icon is `grows[0].icon`); `rday` is today's chance of rain, -1 when the
+  // backend sent none, which is not the same as 0.
+  std::string place, temp, feels, head, sent, cond, wind, wdir, wspd, gust;
+  int rday = -1;
   std::vector<HourSlot> hours;
 };
 
@@ -119,7 +129,7 @@ inline int hhmm_to_minutes(const std::string &s) {
 // compiles each one in); the host simulator fills the same members from TTFs.
 struct FontSet {
   const lv_font_t *clock168 = nullptr;   // Figtree 600, the clock face
-  const lv_font_t *hero88 = nullptr;     // Figtree 600, the temperature hero
+  const lv_font_t *sans600_46 = nullptr;  // Figtree 600, a weather card's big value
   const lv_font_t *sans600_30 = nullptr;
   const lv_font_t *sans600_24 = nullptr;
   const lv_font_t *sans600_20 = nullptr;
@@ -236,6 +246,28 @@ inline void set_hidden(lv_obj_t *o, bool hidden) {
     lv_obj_remove_flag(o, LV_OBJ_FLAG_HIDDEN);
 }
 
+// A weather icon: a hidden, sourceless lv_image, built once and pointed at an A8 mask from
+// hb_icons.h by set_icon below whenever a document says which one. The token is the only colour
+// it ever has (hb_icons.h's icons carry none of their own), so switching it later means removing
+// this style and adding another, the same as set_tok does for a label.
+inline lv_obj_t *mk_icon(lv_obj_t *parent, int x, int y, Tok tok) {
+  lv_obj_t *img = lv_image_create(parent);
+  lv_obj_set_pos(img, x, y);
+  lv_obj_add_style(img, &g_img[tok], 0);
+  set_hidden(img, true);
+  return img;
+}
+
+// Points an icon built by mk_icon at `name` (one of hb_icons.h's, or empty), at `size` (32 on a
+// weather card, 24 in the hourly strip). Hidden rather than a blank image when the name is empty
+// or not one hb_icons.h has at that size, which is also what an older backend's missing field
+// comes in as.
+inline void set_icon(lv_obj_t *img, const std::string &name, int size) {
+  const lv_image_dsc_t *dsc = name.empty() ? nullptr : icon(name.c_str(), size);
+  lv_image_set_src(img, dsc);
+  set_hidden(img, dsc == nullptr);
+}
+
 // A card: the dark rounded panel boards and the agenda rest their rows on. The design has no
 // coloured left edge; a row's state is in its status colour.
 inline lv_obj_t *mk_card(lv_obj_t *parent, int x, int y, int w, int h) {
@@ -322,6 +354,18 @@ inline bool is_number(const std::string &v) {
   for (; i < v.size(); i++)
     if (v[i] < '0' || v[i] > '9') return false;
   return true;
+}
+
+// The weather strip's bar colour: `t` (a temperature string, contract says whole degrees Celsius
+// but this rounds rather than trusts that) looked up in the absolute scale generated into
+// TEMP_SCALE_DAY/NIGHT by firmware/sim/tools/temp_scale.py, clamped to the table's -5 to 30 C
+// span. `night` picks the table, not a token: the colour is by value, not a shared style, so
+// nothing here reads the global palette on its own.
+inline lv_color_t temp_bar_color(const std::string &t, bool night) {
+  int c = (int) std::lround(atof(t.c_str()));
+  if (c < -5) c = -5;
+  if (c > 30) c = 30;
+  return lv_color_hex((night ? TEMP_SCALE_NIGHT : TEMP_SCALE_DAY)[c + 5]);
 }
 
 // Swap a panel between a filled card and nothing at all, which is what tells a raised row from a
@@ -639,11 +683,11 @@ class PageView {
 // when those show. The numerals stand 121 px tall at 168 px and start 39 px below their label's
 // top, so putting the visible digits' centre on y=240 (the middle of the 480 px face) takes a
 // label top of 240 - 39 - 121/2 = 140.5, rounded to 141, which puts their visible ink at 179-300 in
-// the rendered PNG. The date and the temperature labels are Figtree 400 at 24 px with auto height,
+// the rendered PNG. The date and the weather line labels are Figtree 400 at 24 px with auto height,
 // so their box top is not their ink top, and the two were placed by rendering
 // firmware/sim/out/clock.png, reading the ink back off its pixels and moving the label until the
 // gap either side of the numerals was 30 px: the date at y=124 puts its ink at 127-149, 30 px above
-// the digits' ink at 179; the temperature at y=327 puts its ink at 330-347, 30 px below the digits'
+// the digits' ink at 179; the weather line at y=327 puts its ink at 330-347, 30 px below the digits'
 // ink at 300. The line in the middle of the face is only ever the wait for SNTP, and the numerals
 // and the date are empty while it shows.
 class ClockView : public PageView {
@@ -663,9 +707,14 @@ class ClockView : public PageView {
     lv_obj_set_style_text_align(waiting_, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(waiting_, LV_LABEL_LONG_MODE_DOTS);
 
-    temp_ = mk_label(root_, 16, 327, 448, 0, F(g_fonts.sans400_24), T_CHALK70, "");
-    lv_obj_set_style_text_align(temp_, LV_TEXT_ALIGN_CENTER, 0);
-    set_hidden(temp_, true);
+    weather_line_ = mk_label(root_, 16, 327, 448, 0, F(g_fonts.sans400_24), T_CHALK70, "");
+    lv_obj_set_style_text_align(weather_line_, LV_TEXT_ALIGN_CENTER, 0);
+    // Truncate with dots rather than wrap: a width>0 label defaults to CLIP (see mk_label), which
+    // just cuts the glyphs off mid-line, and the simulator's font renderer measures glyph advances
+    // a little differently from the device's, so a line that just fits on one does not on the
+    // other. DOTS is the same fallback every other single-line label on the board uses.
+    lv_label_set_long_mode(weather_line_, LV_LABEL_LONG_MODE_DOTS);
+    set_hidden(weather_line_, true);
 
     // The foot row: a hairline and one centred line, shown only while a notice or a problem has
     // something to say. No dot here any more, the diary having left the face entirely.
@@ -708,13 +757,14 @@ class ClockView : public PageView {
     return std::string(DAYS[dow]) + " " + std::to_string((int) now.day_of_month) + " " + MONTHS[mon];
   }
 
-  // The temperature PageHost works out from the document, shown centred under the numerals.
-  // Hidden rather than blank when the document has none.
-  void set_temp(const std::string &temp) {
-    if (temp == temp_text_) return;
-    temp_text_ = temp;
-    lv_label_set_text(temp_, temp_text_.c_str());
-    set_hidden(temp_, temp_text_.empty());
+  // The one line PageHost builds from the weather page's temperature, current conditions and
+  // wind, shown centred under the numerals. Hidden rather than blank when the document has none
+  // of the three.
+  void set_weather_line(const std::string &line) {
+    if (line == weather_line_text_) return;
+    weather_line_text_ = line;
+    lv_label_set_text(weather_line_, weather_line_text_.c_str());
+    set_hidden(weather_line_, weather_line_text_.empty());
   }
   // A firmware notice ("Updating firmware 12%", "Updated to 1.3.0") takes the foot row for as
   // long as it is set, then hands it back. Nothing else interrupts the clock.
@@ -757,9 +807,9 @@ class ClockView : public PageView {
     set_hidden(rule_, msg.empty());
   }
 
-  lv_obj_t *date_ = nullptr, *time_ = nullptr, *temp_ = nullptr, *waiting_ = nullptr;
+  lv_obj_t *date_ = nullptr, *time_ = nullptr, *weather_line_ = nullptr, *waiting_ = nullptr;
   lv_obj_t *rule_ = nullptr, *line_ = nullptr;
-  std::string last_hm_, temp_text_, notice_, problem_text_, doc_notice_;
+  std::string last_hm_, weather_line_text_, notice_, problem_text_, doc_notice_;
 };
 
 // ---- pairing: the only page besides the clock while the device is unclaimed. The QR encodes the
@@ -1579,21 +1629,21 @@ class AgendaView : public PageView {
 
 // ---- sky: the weather face, laid out as SkyFace in the design system.
 //
-// 16 px of padding, the place and the stamp on a 28 px header, one big temperature with the day
-// in a line and a sentence under it, and the hours to come as a strip of bars along the bottom.
+// 16 px of padding, the place and the stamp on a 28 px header, three cards (now, wind, today's
+// rain), a headline and a sentence under them, and the hours to come as a strip of bars along
+// the bottom.
 //
-// No icons are drawn here at all: the icon webfont went with S14 and the weather set the design
-// wants has not been drawn yet. The bars and the numbers say it in the meantime.
+// Icons are Meteocons line icons (firmware/icons/meteocons/), rasterised offline by
+// firmware/sim/tools/icons.py into hb_icons.h as A8 alpha masks, drawn with lv_image and
+// recoloured by a design token (T_CHALK on a card, T_CHALK70 in the hourly strip) through the
+// ordinary shared-style mechanism, g_img in hb_tokens.h, so apply_palette() repaints them for
+// free along with everything else.
 class SkyView : public PageView {
  public:
   SkyView(lv_obj_t *parent, const std::string &id) : PageView(parent, id, 'g') {
     strip_.build(root_, margin_);
     strip_.set_dot(T_WEATHER);
-    // The hero is auto-width so `feels` can be put beside it, on its baseline, once the number
-    // is known. The degree sign is a real glyph in the 88 px face, not a drawn ring.
-    hero_ = mk_label(root_, margin_, HEAD_BOTTOM, 0, 0, F(g_fonts.hero88), T_CHALK, "");
-    tracked(hero_, -4);
-    feels_ = mk_label(root_, margin_, HEAD_BOTTOM, 0, 0, F(g_fonts.sans500_20), T_CHALK70, "");
+    build_cards_();
     head_ = mk_label(root_, margin_, HEAD_BOTTOM, TEXT_W, 0, F(g_fonts.sans500_20), T_HEADLINE, "");
     lv_label_set_long_mode(head_, LV_LABEL_LONG_MODE_DOTS);
     sent_ = mk_label(root_, margin_, HEAD_BOTTOM, TEXT_W, 0, F(g_fonts.sans400_18), T_CHALK70, "");
@@ -1611,7 +1661,9 @@ class SkyView : public PageView {
     if (temp.empty()) {
       // A document from a backend older than this face, or one cached before it: the first row's
       // big value is the temperature and its second line is all the headline there is. Nothing
-      // else on the page can be trusted to be about the weather, so nothing else is shown.
+      // else on the page can be trusted to be about the weather, so nothing else is shown, and
+      // the wind and rain cards fall back to their icon-only state since wspd and rday cannot
+      // have arrived either.
       if (!pg.grows.empty() && is_number(pg.grows[0].value)) {
         temp = pg.grows[0].value;
         head = pg.grows[0].b;
@@ -1619,59 +1671,201 @@ class SkyView : public PageView {
       feels.clear();
       sent.clear();
     }
+    lv_obj_t *card_roots[CARDS] = {cards_[0].root, cards_[1].root, cards_[2].root};
     if (temp.empty()) {
-      for (lv_obj_t *o : {hero_, feels_, head_, sent_, card_}) set_hidden(o, true);
+      for (lv_obj_t *o : card_roots) set_hidden(o, true);
+      set_hidden(head_, true);
+      set_hidden(sent_, true);
+      set_hidden(card_, true);
       empty_.set(copy::OFFLINE, copy::SKY_NO_FORECAST);
       return;
     }
     empty_.hide();
-    label_text(hero_, temp + "\xC2\xB0");              // U+00B0
-    label_text(feels_, feels.empty() ? "" : copy::FEELS + feels + "\xC2\xB0");
+    for (lv_obj_t *o : card_roots) set_hidden(o, false);
+    fill_cards_(pg, temp, feels);
     label_text(head_, head);
     label_text(sent_, sent);
-    for (lv_obj_t *o : {hero_, feels_, head_, sent_}) set_hidden(o, false);
-    set_hidden(feels_, feels.empty());
     set_hidden(head_, head.empty());
     set_hidden(sent_, sent.empty());
+    int text_bottom = layout_text_();
     set_hidden(card_, !hours);
-    if (hours) fill_strip_(pg.hours);
-    // With no strip to draw, the block has the whole face to be centred on rather than the top
-    // of it: a page carrying only rows should not look like one with something missing.
-    centre_(hours ? card_y_ : 480 - margin_);
+    if (hours) {
+      // An older backend sends no `i` on any slot: a row only exists when at least one slot has
+      // something to put in it.
+      bool any_icon = false;
+      for (const HourSlot &h : pg.hours)
+        if (!h.i.empty()) {
+          any_icon = true;
+          break;
+        }
+      layout_strip_(any_icon, text_bottom);
+      fill_strip_(pg.hours);
+    }
   }
 
   void tick(esphome::ESPTime now) override { tick_header_(now); }
 
+  // A bar's colour is set by value (temp_bar_color), which no shared style reaches: every bar
+  // already on the face has to be told when the palette turns over, the same as a reminder's ring.
+  void set_night(bool night) override {
+    PageView::set_night(night);
+    for (int i = 0; i < COLS; i++) {
+      Col &c = cols_[i];
+      lv_obj_set_style_bg_color(c.bar, c.temp_str.empty() ? col(T_WEATHER) : temp_bar_color(c.temp_str, night), 0);
+    }
+  }
+
  private:
-  // The face's geometry: the header ends at 44, the strip card's bottom sits on the 16 px margin
-  // and the block between them is centred on what is left.
+  // The face's geometry: the header ends at 44, the strip card's bottom sits on the 16 px margin,
+  // the three cards sit right under the header, and the headline and sentence run below them.
   static const int HEAD_BOTTOM = 44, TEXT_W = 448, GAP = 10;
+
+  // ---- the three cards: SkyFace's now/wind/rain row. 16 px side margins and 8 px between them
+  // leaves (448 - 16) / 3 = 144 px wide each; 16 px corners, the same radius as the hourly card.
+  // Every card has the same three rows, left aligned: a 28 px icon (with an optional short label
+  // beside it, centred on the icon), one big value, one small line. 10 px padding and a 1 px gap
+  // either side of the value row (rather than the 12 px padding and 8/4 px gaps an earlier pass
+  // used with a 32 px icon) is what brings the card down to 126 px tall without the value or the
+  // sub line touching anything: both still sit inside their own font's line height, which already
+  // carries a little internal leading above and below the ink. A card's own height never depends
+  // on its data, only on the four numbers below and the three fonts involved, so it is worked out
+  // once, in build_cards_, and never revisited.
+  static const int CARDS = 3, CARD_GAP = 8, CARD_PAD = 10, CARD_RADIUS = 16;
+  static const int CARD_W = (TEXT_W - (CARDS - 1) * CARD_GAP) / CARDS;
+  static const int CARD_ICON = 28, ICON_LABEL_GAP = 6, CARD_ROW_GAP1 = 1, CARD_ROW_GAP2 = 1;
+
+  struct Card {
+    lv_obj_t *root = nullptr, *icon = nullptr, *label = nullptr, *value = nullptr, *sub = nullptr;
+  };
+
+  void build_cards_() {
+    int label_h = lv_font_get_line_height(F(g_fonts.sans600_20));
+    int value_h = lv_font_get_line_height(F(g_fonts.sans600_46));
+    int sub_h = lv_font_get_line_height(F(g_fonts.sans400_18));
+    cards_h_ = CARD_PAD + CARD_ICON + CARD_ROW_GAP1 + value_h + CARD_ROW_GAP2 + sub_h + CARD_PAD;
+    for (int i = 0; i < CARDS; i++) {
+      Card &c = cards_[i];
+      int x = margin_ + i * (CARD_W + CARD_GAP);
+      c.root = mk_panel(root_, x, HEAD_BOTTOM, CARD_W, cards_h_, T_CARD, CARD_RADIUS);
+      c.icon = mk_icon(c.root, CARD_PAD, CARD_PAD, T_CHALK);
+      int label_x = CARD_PAD + CARD_ICON + ICON_LABEL_GAP;
+      c.label = mk_label(c.root, label_x, CARD_PAD + (CARD_ICON - label_h) / 2, CARD_W - label_x - CARD_PAD,
+                          label_h, F(g_fonts.sans600_20), T_CHALK, "");
+      lv_label_set_long_mode(c.label, LV_LABEL_LONG_MODE_DOTS);
+      int value_y = CARD_PAD + CARD_ICON + CARD_ROW_GAP1;
+      c.value = mk_label(c.root, CARD_PAD, value_y, CARD_W - 2 * CARD_PAD, value_h, F(g_fonts.sans600_46),
+                          T_CHALK, "");
+      // The card's own numbers never need it (fig600_46 was sized for "-12°" and "100%" to both
+      // fit at 120 px, and 10 px padding leaves 124), but the sub line's "mph, gusts " plus up to
+      // 4 more characters can, on an unrealistically wide gust reading, so it gets the same
+      // truncate-with-dots every other label that might overflow in this file uses, rather than a
+      // hard, ellipsis-less clip.
+      c.sub = mk_label(c.root, CARD_PAD, value_y + value_h + CARD_ROW_GAP2, CARD_W - 2 * CARD_PAD, sub_h,
+                        F(g_fonts.sans400_18), T_CHALK70, "");
+      lv_label_set_long_mode(c.sub, LV_LABEL_LONG_MODE_DOTS);
+    }
+  }
+
+  // Card 1 is the temperature, exactly as the old hero was: same source, same older-backend
+  // fallback (both resolved by the caller, in `temp` and `feels`), no label, ever. Card 2 is the
+  // wind: the icon is always there, whether or not there is a reading, but the label, the value
+  // and the mph line come and go with `wspd`, the one field that makes this a reading rather
+  // than an empty card with an icon on it; `wdir` and `gust` are each their own field again
+  // inside that, so either can be missing while the other is not. Card 3 is today's rain: no
+  // label, ever, and an umbrella rather than a raindrop once it is worth carrying one.
+  void fill_cards_(const Page &pg, const std::string &temp, const std::string &feels) {
+    Card &now = cards_[0];
+    set_icon(now.icon, pg.grows.empty() ? "" : pg.grows[0].icon, CARD_ICON);
+    set_hidden(now.label, true);
+    label_text(now.value, temp + "\xC2\xB0");   // U+00B0
+    label_text(now.sub, feels.empty() ? "" : copy::FEELS + feels + "\xC2\xB0");
+    set_hidden(now.sub, feels.empty());
+
+    Card &wind = cards_[1];
+    set_icon(wind.icon, "wind", CARD_ICON);
+    bool has_wind = !pg.wspd.empty();
+    label_text(wind.label, pg.wdir);
+    set_hidden(wind.label, !has_wind || pg.wdir.empty());
+    label_text(wind.value, pg.wspd);
+    set_hidden(wind.value, !has_wind);
+    label_text(wind.sub, pg.gust.empty() ? copy::MPH : std::string(copy::MPH_GUSTS) + pg.gust);
+    set_hidden(wind.sub, !has_wind);
+
+    Card &rain = cards_[2];
+    bool has_rain = pg.rday >= 0;
+    set_icon(rain.icon, has_rain && pg.rday >= 50 ? "umbrella" : "raindrop", CARD_ICON);
+    set_hidden(rain.label, true);
+    label_text(rain.value, has_rain ? std::to_string(pg.rday) + "%" : "");
+    set_hidden(rain.value, !has_rain);
+    label_text(rain.sub, copy::RAIN_TODAY);
+    set_hidden(rain.sub, !has_rain);
+  }
+
+  // The headline and the sentence sit directly under the cards, in a fixed stack (no more
+  // centring: the cards are always there once there is a temperature, unlike the old hero, so
+  // there is nothing left to centre against). Returns where the last visible line ends, which is
+  // as far down as layout_strip_ is allowed to let the hourly card's top come.
+  int layout_text_() {
+    lv_obj_update_layout(root_);
+    int head_h = lv_obj_has_flag(head_, LV_OBJ_FLAG_HIDDEN) ? 0 : lv_obj_get_height(head_);
+    int sent_h = lv_obj_has_flag(sent_, LV_OBJ_FLAG_HIDDEN) ? 0 : lv_obj_get_height(sent_);
+    int y = HEAD_BOTTOM + cards_h_;
+    if (head_h > 0) {
+      y += GAP;
+      lv_obj_set_pos(head_, margin_, y);
+      y += head_h;
+    }
+    if (sent_h > 0) {
+      y += GAP;
+      lv_obj_set_pos(sent_, margin_, y);
+      y += sent_h;
+    }
+    return y;
+  }
+
   // The strip card, from SkyFace: six columns 60 wide with 8 between them inside 24 of padding,
-  // and a bar area of 60. The six columns measure 400 on a 68 pitch, which is what centres them
-  // in the 448 card. The card is taller than the design's 128 because a rasterised 16 px label
-  // and a 14 px one need more room than the mock's line boxes did.
-  static const int COLS = 6, COL_W = 60, COL_PITCH = 68, CARD_PAD = 24, BAR_MAX = 60, BAR_MIN = 22, SEP = 9, RAIN_GAP = 16, CARD_FOOT = 14;
+  // and a bar area up to 60 tall. The six columns measure 400 on a 68 pitch, which is what
+  // centres them in the 448 card. The card is taller than the design's 128 because a rasterised
+  // 16 px label and a 14 px one need more room than the mock's line boxes did.
+  //
+  // Above the hairline, top to bottom: a 24 px icon row, when the document has any, then the
+  // chance of rain, always. A backend sending no icon draws no icon row and reserves no room for
+  // it, so the card is exactly the height it always was. layout_strip_ works this out, and how
+  // tall the bars can be, every time a document arrives: the card grows upward first, and only
+  // trims the bar area down towards BAR_MIN if that still leaves less than SENT_GAP under the
+  // headline/sentence block's last line. The wind row this card once had (a per-slot "SW 12"
+  // under the rain percentages) is gone: the backend stopped sending hourly wind, and the room it
+  // held goes back to the bars.
+  static const int COLS = 6, COL_W = 60, COL_PITCH = 68, CARD_PAD2 = 24, BAR_MAX = 60, BAR_MIN = 22, SEP = 9, RAIN_GAP = 16, CARD_FOOT = 14;
+  static const int STRIP_ICON = 24;
+  // The least the text block's last line and the top of the hourly card are ever left apart.
+  static const int SENT_GAP = 16;
 
   struct Col {
-    lv_obj_t *root = nullptr, *temp = nullptr, *bar = nullptr, *hour = nullptr, *rain = nullptr;
+    lv_obj_t *root = nullptr, *icon = nullptr, *temp = nullptr, *bar = nullptr, *hour = nullptr,
+             *rain = nullptr;
+    // The bar's own colour is set by value (temp_bar_color), not through the T_WEATHER style, so
+    // it has to be remembered here for set_night to repaint it from the other table; empty is the
+    // slot with no reading, which keeps the plain module hue rather than a scale colour.
+    std::string temp_str;
   };
 
   void build_strip_() {
-    int th = lv_font_get_line_height(F(g_fonts.sans500_16));
     int hh = lv_font_get_line_height(F(g_fonts.sans500_16));
-    // Top to bottom: the chances of rain, a hairline, the temperatures riding on their bars, and
-    // the hours along the foot. `top` is where the bar area's own column starts.
+    int th = hh;
+    // The one-row, full-height layout: what the card looks like until the first document sets its
+    // real geometry through layout_strip_, which nothing shows before then since the card starts
+    // hidden.
     int top = hh + SEP + RAIN_GAP;
     int inner = top + th + 6 + BAR_MAX + 6 + hh;
-    // The hours stand closer to the card's foot than the chances do to its top: the room that
-    // saves is the gap under the hairline.
-    card_h_ = inner + CARD_PAD + CARD_FOOT;
+    card_h_ = inner + CARD_PAD2 + CARD_FOOT;
     card_y_ = 480 - margin_ - card_h_;
     card_ = mk_panel(root_, margin_, card_y_, TEXT_W, card_h_, T_CARD, 16);
     set_hidden(card_, true);
     for (int i = 0; i < COLS; i++) {
       Col &c = cols_[i];
-      c.root = mk_obj(card_, CARD_PAD + COL_PITCH * i, CARD_PAD, COL_W, inner);
+      c.root = mk_obj(card_, CARD_PAD2 + COL_PITCH * i, CARD_PAD2, COL_W, inner);
+      c.icon = mk_icon(c.root, (COL_W - STRIP_ICON) / 2, 0, T_CHALK70);
       c.rain = mk_label(c.root, 0, 0, COL_W, hh, F(g_fonts.sans500_16), T_HOUR, "");
       lv_obj_set_style_text_align(c.rain, LV_TEXT_ALIGN_CENTER, 0);
       c.temp = mk_label(c.root, 0, top, COL_W, th, F(g_fonts.sans500_16), T_HEADLINE, "");
@@ -1682,20 +1876,63 @@ class SkyView : public PageView {
       lv_obj_set_style_text_align(c.hour, LV_TEXT_ALIGN_CENTER, 0);
       set_hidden(c.root, true);
     }
-    // One hairline across the six columns, under the chances of rain.
-    mk_rule(card_, CARD_PAD, CARD_PAD + hh + SEP / 2, COL_PITCH * (COLS - 1) + COL_W, T_LINE);
+    // One hairline across the six columns, under the chances of rain (and the icon row, once a
+    // document turns it on: layout_strip_ is what moves the hairline down to make room for it).
+    hairline_ = mk_rule(card_, CARD_PAD2, CARD_PAD2 + hh + SEP / 2, COL_PITCH * (COLS - 1) + COL_W, T_LINE);
     bar_top_ = top + th + 6;
     temp_h_ = th;
+    bar_max_ = BAR_MAX;
+  }
+
+  // Recomputes the strip card's vertical geometry for the document that just arrived: whether the
+  // icon row is drawn, and how tall the bars can be. Must run after layout_text_ (`text_bottom`
+  // is its return value) and before fill_strip_, which knows each bar's own height and so
+  // positions c.temp itself. See the comment on the geometry constants above for the two-step
+  // rule this follows.
+  void layout_strip_(bool any_icon, int text_bottom) {
+    int hh = lv_font_get_line_height(F(g_fonts.sans500_16));
+    int th = hh;
+    // Icon row first (24 px, its own size, not a line height), then rain (always).
+    int pre_hair_h = (any_icon ? STRIP_ICON : 0) + hh;
+    int top = pre_hair_h + SEP + RAIN_GAP;
+    int bar_max = BAR_MAX;
+    int inner = 0, card_h = 0, card_y = 0;
+    for (;;) {
+      inner = top + th + 6 + bar_max + 6 + hh;
+      card_h = inner + CARD_PAD2 + CARD_FOOT;
+      card_y = 480 - margin_ - card_h;
+      if (text_bottom + SENT_GAP <= card_y || bar_max <= BAR_MIN) break;
+      bar_max--;
+    }
+    card_h_ = card_h;
+    card_y_ = card_y;
+    bar_top_ = top + th + 6;
+    temp_h_ = th;
+    bar_max_ = bar_max;
+    lv_obj_set_pos(card_, margin_, card_y_);
+    lv_obj_set_size(card_, TEXT_W, card_h_);
+    lv_obj_set_pos(hairline_, CARD_PAD2, CARD_PAD2 + pre_hair_h + SEP / 2);
+    int rain_y0 = any_icon ? STRIP_ICON : 0;
+    for (int i = 0; i < COLS; i++) {
+      Col &c = cols_[i];
+      lv_obj_set_height(c.root, inner);
+      lv_obj_set_y(c.rain, rain_y0);
+      // c.temp is repositioned per column in fill_strip_, which runs right after this and knows
+      // each bar's own height; c.hour sits below the whole bar area, the same for every column.
+      lv_obj_set_y(c.hour, top + th + 12 + bar_max);
+    }
   }
 
   // The focus column is the first hour at half a chance of rain or more, which is the hour the
   // sentence is about. With nothing above half, the next hour is the one to read. A bar's height
   // is the temperature, because the number over it is: the warmest of the six slots is the full
-  // height and the coldest about a third of it, so the strip reads as a day warming and cooling,
-  // and each number rides on top of its bar. The brightness says the same thing again, the
-  // warmest hour the full hue and the coldest a third of it. The chance of rain is a small
-  // percentage along the top of the card, over a hairline, in the weather hue from half a chance
-  // up.
+  // height and the coldest about a third of it, so the strip reads as a day warming and cooling.
+  // The bar's colour is a second, independent read of the same number: temp_bar_color's fixed
+  // scale, so -5 C is the same colour on every day the board ever shows, not just the coldest of
+  // that day's six slots. The chance of rain is a small percentage along the top of the card,
+  // over a hairline, in the weather hue from half a chance up. The icon above it is plain: a slot
+  // with nothing to say draws an empty cell rather than hide the whole row, which is
+  // layout_strip_'s call to make.
   void fill_strip_(const std::vector<HourSlot> &hours) {
     int focus = 0, lo = 0, hi = 0;
     bool any = false, found = false;
@@ -1723,55 +1960,30 @@ class SkyView : public PageView {
       // reading, and so would an hour with no temperature, which gets the same.
       int h = BAR_MIN;
       if (!s.t.empty()) {
-        h = hi > lo ? BAR_MIN + (BAR_MAX - BAR_MIN) * (atoi(s.t.c_str()) - lo) / (hi - lo)
-                    : (BAR_MIN + BAR_MAX) / 2;
+        h = hi > lo ? BAR_MIN + (bar_max_ - BAR_MIN) * (atoi(s.t.c_str()) - lo) / (hi - lo)
+                    : (BAR_MIN + bar_max_) / 2;
       }
-      lv_obj_set_pos(c.bar, 0, bar_top_ + BAR_MAX - h);
+      lv_obj_set_pos(c.bar, 0, bar_top_ + bar_max_ - h);
       lv_obj_set_height(c.bar, h);
-      lv_obj_set_y(c.temp, bar_top_ + BAR_MAX - h - 6 - temp_h_);
-      int opa = 255;
-      if (hi > lo && !s.t.empty()) opa = 85 + (255 - 85) * (atoi(s.t.c_str()) - lo) / (hi - lo);
-      lv_obj_set_style_opa(c.bar, (lv_opa_t) opa, 0);
+      lv_obj_set_y(c.temp, bar_top_ + bar_max_ - h - 6 - temp_h_);
+      c.temp_str = s.t;
+      lv_obj_set_style_bg_color(c.bar, s.t.empty() ? col(T_WEATHER) : temp_bar_color(s.t, g_night), 0);
       int r = s.r < 0 ? 0 : s.r > 100 ? 100 : s.r;
       label_text(c.rain, std::to_string(r) + "%");
       set_tok(c.rain, r >= 50 ? T_WEATHER : T_HOUR);
+      set_icon(c.icon, s.i, STRIP_ICON);
       label_text(c.hour, s.h);
       set_tok(c.hour, i == focus ? T_TIME2 : T_HOUR);
       set_hidden(c.root, false);
     }
   }
 
-  // The middle block is centred on what the header and the strip card leave, after the sentence
-  // has been laid out: one line or two changes how tall the block is.
-  void centre_(int bottom) {
-    lv_obj_update_layout(root_);
-    int hero_h = lv_obj_get_height(hero_);
-    int head_h = lv_obj_has_flag(head_, LV_OBJ_FLAG_HIDDEN) ? 0 : lv_obj_get_height(head_);
-    int sent_h = lv_obj_has_flag(sent_, LV_OBJ_FLAG_HIDDEN) ? 0 : lv_obj_get_height(sent_);
-    int total = hero_h + (head_h > 0 ? GAP + head_h : 0) + (sent_h > 0 ? GAP + sent_h : 0);
-    int top = HEAD_BOTTOM + (bottom - HEAD_BOTTOM - total) / 2;
-    if (top < HEAD_BOTTOM + 8) top = HEAD_BOTTOM + 8;
-    lv_obj_set_pos(hero_, margin_, top);
-    // `feels` sits on the hero's baseline, not on its box, which is what puts a 20 px word on
-    // the same line as an 88 px number.
-    const lv_font_t *hf = F(g_fonts.hero88), *ff = F(g_fonts.sans500_20);
-    int base = (lv_font_get_line_height(hf) - hf->base_line) -
-               (lv_font_get_line_height(ff) - ff->base_line);
-    lv_obj_set_pos(feels_, margin_ + lv_obj_get_width(hero_) + 12, top + base);
-    int y = top + hero_h;
-    if (head_h > 0) {
-      y += GAP;
-      lv_obj_set_pos(head_, margin_, y);
-      y += head_h;
-    }
-    if (sent_h > 0) lv_obj_set_pos(sent_, margin_, y + GAP);
-  }
-
-  lv_obj_t *hero_ = nullptr, *feels_ = nullptr, *head_ = nullptr, *sent_ = nullptr;
-  lv_obj_t *card_ = nullptr;
+  lv_obj_t *head_ = nullptr, *sent_ = nullptr;
+  lv_obj_t *card_ = nullptr, *hairline_ = nullptr;
+  Card cards_[CARDS];
   Col cols_[COLS];
   EmptyCard empty_;
-  int card_h_ = 0, card_y_ = 0, bar_top_ = 0, temp_h_ = 0;
+  int cards_h_ = 0, card_h_ = 0, card_y_ = 0, bar_top_ = 0, temp_h_ = 0, bar_max_ = 0;
 };
 
 // ---- list: the to-do face, laid out as ListFace in the design system.
@@ -1987,7 +2199,7 @@ class PageHost {
     host_ = nullptr;
     cur_ = 0;
     ssid_.clear();
-    temp_.clear();
+    weather_line_.clear();
   }
 
   // Reconcile the pages on screen with the document: reuse by id and type, create what is new,
@@ -2021,8 +2233,8 @@ class PageHost {
     // The document's notice goes on after the problem line has been cleared, so the arrival of a
     // document no longer wipes it: only a document without one does.
     clock->set_doc_notice(doc.notice);
-    read_temp_source_(doc);
-    clock->set_temp(temp_);
+    read_weather_line_(doc);
+    clock->set_weather_line(weather_line_);
     layout_();
     size_t idx = cur_ < views_.size() ? cur_ : views_.size() - 1;
     if (!keep.empty()) {
@@ -2052,8 +2264,8 @@ class PageHost {
     }
     // The weather belonged to a household that no longer claims this device, and so did the
     // notice.
-    temp_.clear();
-    static_cast<ClockView *>(clock.get())->set_temp("");
+    weather_line_.clear();
+    static_cast<ClockView *>(clock.get())->set_weather_line("");
     static_cast<ClockView *>(clock.get())->set_doc_notice("");
     static_cast<PairingView *>(pair.get())->set_code(code);
     views_.push_back(std::move(clock));
@@ -2242,12 +2454,13 @@ class PageHost {
     if (boot_) boot_->raise();
   }
 
-  // ---- the clock's temperature
-  // The temperature comes off the weather page the clock itself never sees, so it is worked out
-  // here, the same way SkyView falls back to a `grows` row for a backend older than the `temp`
-  // field.
-  void read_temp_source_(const Document &doc) {
-    temp_.clear();
+  // ---- the clock's weather line
+  // The line under the numerals comes off the weather page the clock itself never sees, so it is
+  // worked out here: temperature, current conditions and wind, joined by " · " (U+00B7), with any
+  // missing part left out together with its separator. The temperature logic, including its
+  // fallback to a `grows` row for a backend older than the `temp` field, is exactly SkyView's.
+  void read_weather_line_(const Document &doc) {
+    weather_line_.clear();
     const Page *weather = nullptr;
     bool named = false;
     for (const Page &pg : doc.pages) {
@@ -2260,14 +2473,23 @@ class PageHost {
       }
     }
     if (weather == nullptr) return;
+    std::string temp;
     if (!weather->temp.empty()) {
-      temp_ = weather->temp + "\xC2\xB0";   // U+00B0
-      return;
+      temp = weather->temp + "\xC2\xB0";   // U+00B0
+    } else if (!weather->grows.empty() && is_number(weather->grows[0].value)) {
+      // A backend older than the weather face sends no `temp`, so the first row's big value
+      // stands in for it, but only when it really is a number: `v` may be a day count or
+      // anything else.
+      temp = weather->grows[0].value + "\xC2\xB0";
     }
-    // A backend older than the weather face sends no `temp`, so the first row's big value stands
-    // in for it, but only when it really is a number: `v` may be a day count or anything else.
-    if (weather->grows.empty()) return;
-    if (is_number(weather->grows[0].value)) temp_ = weather->grows[0].value + "\xC2\xB0";
+    std::vector<std::string> parts;
+    if (!temp.empty()) parts.push_back(temp);
+    if (!weather->cond.empty()) parts.push_back(weather->cond);
+    if (!weather->wind.empty()) parts.push_back(weather->wind);
+    for (size_t i = 0; i < parts.size(); i++) {
+      if (i > 0) weather_line_ += " \xC2\xB7 ";   // U+00B7, middle dot
+      weather_line_ += parts[i];
+    }
   }
 
 #if HB_CAROUSEL
@@ -2302,8 +2524,8 @@ class PageHost {
   // The boot overlay is never a page: it is owned here and destroyed once, on its own.
   std::unique_ptr<BootView> boot_;
   std::string ssid_;
-  // What the clock's temperature is built from.
-  std::string temp_;
+  // The clock's weather line, built by read_weather_line_.
+  std::string weather_line_;
   size_t cur_ = 0;
   // Which palette the board is on, so a view built later starts on the same one.
   bool night_ = false;

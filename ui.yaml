@@ -25,7 +25,7 @@ lvgl:
         # hidden, none ever drawn. Nothing in this file draws with a built-in font any more, so
         # every font a page can use is anchored here.
         - label: {id: anchor_fig600_168, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig600_168, hidden: true}
-        - label: {id: anchor_fig600_88, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig600_88, hidden: true}
+        - label: {id: anchor_fig600_46, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig600_46, hidden: true}
         - label: {id: anchor_fig600_30, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig600_30, hidden: true}
         - label: {id: anchor_fig600_24, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig600_24, hidden: true}
         - label: {id: anchor_fig600_20, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig600_20, hidden: true}
@@ -604,12 +604,16 @@ font:
     size: 168
     bpp: 4
     glyphs: ["0123456789:"]
-  # The temperature hero on the weather face: digits, the degree sign and a minus.
+  # The weather face's three cards' big value (temperature, wind speed, chance of rain): digits,
+  # a minus, the degree sign and a percent. 46 px is the largest whole size at which both "-12°"
+  # and "100%" (the widest values the three cards ever show) still fit the 120 px a card's content
+  # leaves them: measured with Figtree SemiBold's own metrics (47 px first overflows, at 121 px),
+  # then checked by rendering a card at each and reading the ink back off the PNG.
   - file: "gfonts://Figtree@600"
-    id: fig600_88
-    size: 88
+    id: fig600_46
+    size: 46
     bpp: 4
-    glyphs: ["0123456789°-"]
+    glyphs: ["0123456789°%-"]
   - file: "gfonts://Figtree@600"
     id: fig600_30
     size: 30

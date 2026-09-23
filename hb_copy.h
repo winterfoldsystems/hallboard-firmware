@@ -45,6 +45,10 @@ inline constexpr const char *SKY_NO_FORECAST = "Can't reach the forecast.";
 // A diary row's second line, and the word in front of a temperature that is not the real one.
 inline constexpr const char *ALL_DAY = "All day";
 inline constexpr const char *FEELS = "feels ";
+// The weather face's wind and rain cards, third row.
+inline constexpr const char *MPH = "mph";
+inline constexpr const char *MPH_GUSTS = "mph, gusts ";  // + the gust speed
+inline constexpr const char *RAIN_TODAY = "rain today";
 
 // ---------------------------------------------------------------- the boot screen
 // The four steps, each in the shape it takes while it is running and once it is done. A step is

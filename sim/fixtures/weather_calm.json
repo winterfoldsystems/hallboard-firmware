@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "gen": 1789717080,
+  "poll": 60,
+  "tz": "Europe/London",
+  "tzp": "GMT0BST,M3.5.0/1,M10.5.0",
+  "pages": [
+    {"type": "generic", "id": "dm_000003", "module": "weather", "title": "Weather", "asof": 1789717080, "stale": false,
+     "rows": [
+       {"i": "fog", "v": "9", "a": "Now", "b": "Fog . high 12 . low 6"}
+     ],
+     "place": "Godalming", "temp": "9", "feels": "8",
+     "wspd": "0", "rday": 5,
+     "head": "Fog, then clear", "sent": "Misty start, clearing by mid-morning.",
+     "hours": [
+       {"h": "06", "t": "8", "r": 5, "i": "fog"},
+       {"h": "08", "t": "9", "r": 5, "i": "fog"},
+       {"h": "10", "t": "10", "r": 0, "i": "sun"},
+       {"h": "12", "t": "12", "r": 0, "i": "sun"},
+       {"h": "14", "t": "12", "r": 0, "i": "sun"},
+       {"h": "16", "t": "11", "r": 5, "i": "partly"}
+     ]}
+  ],
+  "settings": {"brightness": 90, "tier": "commuter", "name": "Hallway"}
+}

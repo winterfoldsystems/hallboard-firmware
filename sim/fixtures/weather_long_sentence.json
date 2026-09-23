@@ -1,0 +1,26 @@
+{
+  "v": 1,
+  "gen": 1789717080,
+  "poll": 60,
+  "tz": "Europe/London",
+  "tzp": "GMT0BST,M3.5.0/1,M10.5.0",
+  "pages": [
+    {"type": "generic", "id": "dm_000003", "module": "weather", "title": "Weather", "asof": 1789717080, "stale": false,
+     "rows": [
+       {"i": "frost", "v": "3", "a": "Now", "b": "Frost . high 9 . low -1"}
+     ],
+     "place": "Godalming", "temp": "3", "feels": "-1",
+     "wdir": "SW", "wspd": "12", "gust": "24", "rday": 40,
+     "head": "Frost, then sunshine",
+     "sent": "Mild but breezy, showers arriving mid afternoon.",
+     "hours": [
+       {"h": "10", "t": "4", "r": 5, "i": "partly"},
+       {"h": "12", "t": "7", "r": 10, "i": "partly"},
+       {"h": "14", "t": "9", "r": 15, "i": "cloud"},
+       {"h": "16", "t": "8", "r": 20, "i": "rain"},
+       {"h": "18", "t": "6", "r": 25, "i": "rain"},
+       {"h": "20", "t": "4", "r": 30, "i": "cloud"}
+     ]}
+  ],
+  "settings": {"brightness": 90, "tier": "commuter", "name": "Hallway"}
+}

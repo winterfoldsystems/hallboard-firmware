@@ -1,0 +1,21 @@
+{
+  "v": 1,
+  "gen": 1789717080,
+  "poll": 60,
+  "tz": "Europe/London",
+  "tzp": "GMT0BST,M3.5.0/1,M10.5.0",
+  "pages": [
+    {"type": "generic", "id": "dm_000003", "module": "weather", "title": "Weather", "asof": 1789717080, "stale": false,
+     "rows": [
+       {"i": "snow", "v": "-12", "a": "Now", "b": "Freezing rain . high -8 . low -14"}
+     ],
+     "place": "Godalming", "temp": "-12", "feels": "-18", "cond": "Freezing rain", "wind": "NW 23 mph",
+     "head": "Freezing rain, then snow", "sent": "Roads are icy, take it easy out there."}
+  ],
+  "settings": {
+    "brightness": 90,
+    "night": {"from": "22:30", "to": "06:30", "brightness": 15},
+    "tier": "commuter",
+    "name": "Hallway"
+  }
+}

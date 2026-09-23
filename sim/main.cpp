@@ -55,7 +55,7 @@ const char *FIG_700 = "fonts/Figtree-Bold.ttf";
 const char *MONO_400 = "fonts/IBMPlexMono-Regular.ttf";
 const FontSpec FONTS[] = {
     {&hb::FontSet::clock168, FIG_600, 168},
-    {&hb::FontSet::hero88, FIG_600, 88},
+    {&hb::FontSet::sans600_46, FIG_600, 46},
     {&hb::FontSet::sans600_30, FIG_600, 30},
     {&hb::FontSet::sans600_24, FIG_600, 24},
     {&hb::FontSet::sans600_20, FIG_600, 20},
@@ -255,6 +255,10 @@ const Scenario SCENARIOS[] = {
        s.night();
      }},
     {"clock-notice", [](Sim &s) { booted(s, "screen_notice.json", 0); }},
+    // The widest realistic weather line: a negative two-digit temperature, a long condition word
+    // and a two-digit wind speed, checking the line fits 448 px without the dots long mode
+    // cutting in.
+    {"clock-weather-long", [](Sim &s) { booted(s, "clock_weather_long.json", 0); }},
     {"clock-problem",
      [](Sim &s) {
        booted(s, "screen_full.json", 0);
@@ -306,8 +310,29 @@ const Scenario SCENARIOS[] = {
        s.night();
      }},
     // A weather page from a backend older than the face, or one cached before it: rows and
-    // nothing else, so the hero falls back to the first row and the strip has nothing to draw.
+    // nothing else, so card 1 falls back to the first row and neither the wind and rain cards nor
+    // the strip have anything to draw.
     {"weather-rows-only", [](Sim &s) { booted(s, "weather_rows_only.json", 1); }},
+    // A backend older than the hourly icon row and the wind/rain cards: hours with no `i` on any
+    // of them and no `wdir`/`wspd`/`gust`/`rday` on the page at all. No hourly icon row, the wind
+    // and rain cards icon-only, and the strip card exactly the height it always was.
+    {"weather-hours-no-icon", [](Sim &s) { booted(s, "weather_hours_no_icon.json", 1); }},
+    // The longest realistic sentence (48 characters; it turns out to stay one line at this width
+    // and font, but is the true worst case the contract allows), with the wind card's "gusts"
+    // clause and the hourly icon row: the tightest the cards, the text block and the strip card
+    // ever get.
+    {"weather-long-sentence", [](Sim &s) { booted(s, "weather_long_sentence.json", 1); }},
+    // Six slots cold to hot, -3 to 29 C: the temperature colour scale end to end, which the other
+    // fixtures never show since screen_full.json only spans 14-18 C.
+    {"weather-scale", [](Sim &s) { booted(s, "weather_scale.json", 1); }},
+    {"weather-scale-night",
+     [](Sim &s) {
+       booted(s, "weather_scale.json", 1);
+       s.night();
+     }},
+    // Still air: `wspd` "0" (which is a reading, not an absence), no `wdir`, no `gust`, and a low
+    // `rday`, so the wind card shows a bare "0 mph" and the rain card keeps its raindrop.
+    {"weather-calm", [](Sim &s) { booted(s, "weather_calm.json", 1); }},
     {"reminders", [](Sim &s) { booted(s, "screen_full.json", 4); }},
     {"reminders-night",
      [](Sim &s) {

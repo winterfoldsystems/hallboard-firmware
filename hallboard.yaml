@@ -34,6 +34,8 @@ esphome:
   includes:
     - hb_copy.h
     - hb_tokens.h
+    - hb_temp_scale.h
+    - hb_icons.h
     - hb_ui.h
     - hb_parse.h
     - trainboard_logic.h
@@ -54,7 +56,7 @@ esphome:
           // Fonts the runtime pages draw with, and the way a widget posts an event back to this
           // script. Then build the carousel, clock page first.
           hb::g_fonts.clock168 = id(fig600_168)->get_lv_font();
-          hb::g_fonts.hero88 = id(fig600_88)->get_lv_font();
+          hb::g_fonts.sans600_46 = id(fig600_46)->get_lv_font();
           hb::g_fonts.sans600_30 = id(fig600_30)->get_lv_font();
           hb::g_fonts.sans600_24 = id(fig600_24)->get_lv_font();
           hb::g_fonts.sans600_20 = id(fig600_20)->get_lv_font();
