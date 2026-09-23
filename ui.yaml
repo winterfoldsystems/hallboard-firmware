@@ -33,6 +33,7 @@ lvgl:
         - label: {id: anchor_fig500_20, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig500_20, hidden: true}
         - label: {id: anchor_fig500_18, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig500_18, hidden: true}
         - label: {id: anchor_fig500_16, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig500_16, hidden: true}
+        - label: {id: anchor_fig400_24, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig400_24, hidden: true}
         - label: {id: anchor_fig400_18, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig400_18, hidden: true}
         - label: {id: anchor_fig700_50, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig700_50, hidden: true}
         - label: {id: anchor_mono400_64, x: 0, y: 0, width: 1, height: 1, text: "", text_font: mono400_64, hidden: true}
@@ -645,6 +646,12 @@ font:
   - file: "gfonts://Figtree@500"
     id: fig500_16
     size: 16
+    bpp: 4
+    glyphs: *text_glyphs
+  # The clock's date and temperature.
+  - file: "gfonts://Figtree@400"
+    id: fig400_24
+    size: 24
     bpp: 4
     glyphs: *text_glyphs
   - file: "gfonts://Figtree@400"

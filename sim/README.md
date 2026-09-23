@@ -31,11 +31,11 @@ the UI changes and not otherwise.
 
 | Name | What it shows |
 |---|---|
-| `clock` | The clock page of a paired board, with the weather line under it |
-| `clock-night` | The same inside the household's night window: muted hues, the live dot still |
-| `clock-notice` | The same with a `settings.notice` from the document |
-| `clock-problem` | The same with a live problem status, which wins over a notice |
-| `clock-waiting-time` | SNTP never answered: no time, no date, "Setting the clock." |
+| `clock` | The clock page of a paired board: the date above the numerals, the temperature below |
+| `clock-night` | The same inside the household's night window: muted hues |
+| `clock-notice` | The same with a `settings.notice` from the document, on the foot row |
+| `clock-problem` | The same with a live problem status on the foot row, which wins over a notice |
+| `clock-waiting-time` | SNTP never answered: no time, no date, "Setting the clock.", temperature still showing |
 | `board-live` | A rail departures board, five rows, one delayed |
 | `board-live-night` | The same board on the night palette |
 | `dots` | The same board a moment after a swipe, with the page indicator up |

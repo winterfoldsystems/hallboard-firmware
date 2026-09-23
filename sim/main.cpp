@@ -63,6 +63,7 @@ const FontSpec FONTS[] = {
     {&hb::FontSet::sans500_20, FIG_500, 20},
     {&hb::FontSet::sans500_18, FIG_500, 18},
     {&hb::FontSet::sans500_16, FIG_500, 16},
+    {&hb::FontSet::sans400_24, FIG_400, 24},
     {&hb::FontSet::sans400_18, FIG_400, 18},
     {&hb::FontSet::mark50, FIG_700, 50},
     {&hb::FontSet::mono64, MONO_400, 64},

@@ -127,6 +127,7 @@ struct FontSet {
   const lv_font_t *sans500_20 = nullptr;
   const lv_font_t *sans500_18 = nullptr;
   const lv_font_t *sans500_16 = nullptr;
+  const lv_font_t *sans400_24 = nullptr;  // Figtree 400, the clock's date and temperature
   const lv_font_t *sans400_18 = nullptr;
   const lv_font_t *mark50 = nullptr;     // Figtree 700, the two letters of the mark
   const lv_font_t *mono64 = nullptr;     // IBM Plex Mono 400, the pairing code
@@ -630,36 +631,47 @@ class PageView {
   int margin_;
 };
 
-// ---- clock: always page one. The date on the left of the strip and the temperature on its
-// right, the time in the middle, and at the foot the next thing in the diary.
+// ---- clock: always page one. No strip, no diary line; the date sits above the numerals and the
+// temperature below them, and the foot row is a notice line that only shows when there is one.
 //
-// Geometry, from ClockFace in the design system with 16 px of padding all round: a 28 px strip
-// at the top and a foot row that ends on the bottom margin, under the page dots when those show.
-// The hairline sits at 424, the foot row runs 440 to 464, and the middle block is centred between
-// the strip (ending at 44) and the hairline. The numerals stand 121 px tall at 168 px and start
-// 39 px below their label's top, which is what puts the clock label at 135. The line in the middle of the
-// face is only ever the wait for SNTP, and the numerals are empty while it shows.
+// Geometry, from ClockFace in the design system with 16 px of padding all round and no strip at
+// all: the hairline still sits at 424 and the foot row still runs 440 to 464, under the page dots
+// when those show. The numerals stand 121 px tall at 168 px and start 39 px below their label's
+// top, so putting the visible digits' centre on y=240 (the middle of the 480 px face) takes a
+// label top of 240 - 39 - 121/2 = 140.5, rounded to 141, which puts their visible ink at 179-300 in
+// the rendered PNG. The date and the temperature labels are Figtree 400 at 24 px with auto height,
+// so their box top is not their ink top, and the two were placed by rendering
+// firmware/sim/out/clock.png, reading the ink back off its pixels and moving the label until the
+// gap either side of the numerals was 30 px: the date at y=124 puts its ink at 127-149, 30 px above
+// the digits' ink at 179; the temperature at y=327 puts its ink at 330-347, 30 px below the digits'
+// ink at 300. The line in the middle of the face is only ever the wait for SNTP, and the numerals
+// and the date are empty while it shows.
 class ClockView : public PageView {
  public:
   explicit ClockView(lv_obj_t *parent) : PageView(parent, "__clock", 'c') {
-    // The strip as every other face has it, without a dot or a hue: the date where a title would
-    // be, and the temperature where the other faces keep the time this one has in the middle.
-    strip_.build(root_, margin_);
+    date_ = mk_label(root_, 16, 124, 448, 0, F(g_fonts.sans400_24), T_CHALK70, "");
+    lv_obj_set_style_text_align(date_, LV_TEXT_ALIGN_CENTER, 0);
 
     // The clock font holds digits and a colon and nothing else, so the label starts empty rather
     // than showing "--:--": four missing glyphs would draw as four boxes.
     // The tracking comes off after the last figure too, which pulls a centred line 5 px to the
     // left of centre; the label starts 10 px in to put it back.
-    time_ = mk_label(root_, 10, 135, 470, 0, F(g_fonts.clock168), T_CHALK, "");
+    time_ = mk_label(root_, 10, 141, 470, 0, F(g_fonts.clock168), T_CHALK, "");
     lv_obj_set_style_text_align(time_, LV_TEXT_ALIGN_CENTER, 0);
     tracked(time_, -10);
-    waiting_ = mk_label(root_, 16, 220, 448, 28, F(g_fonts.sans500_20), T_CHALK70, copy::CLOCK_WAITING);
+    waiting_ = mk_label(root_, 16, 226, 448, 28, F(g_fonts.sans500_20), T_CHALK70, copy::CLOCK_WAITING);
     lv_obj_set_style_text_align(waiting_, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(waiting_, LV_LABEL_LONG_MODE_DOTS);
 
+    temp_ = mk_label(root_, 16, 327, 448, 0, F(g_fonts.sans400_24), T_CHALK70, "");
+    lv_obj_set_style_text_align(temp_, LV_TEXT_ALIGN_CENTER, 0);
+    set_hidden(temp_, true);
+
+    // The foot row: a hairline and one centred line, shown only while a notice or a problem has
+    // something to say. No dot here any more, the diary having left the face entirely.
     rule_ = mk_rule(root_, 16, 424, 448, T_RAISED);
-    dot_ = mk_panel(root_, 16, 447, 9, 9, T_CALENDAR, LV_RADIUS_CIRCLE);
-    line_ = mk_label(root_, 37, 440, 427, 24, F(g_fonts.sans400_18), T_TIME2, "");
+    line_ = mk_label(root_, 16, 440, 448, 24, F(g_fonts.sans400_18), T_CHALK70, "");
+    lv_obj_set_style_text_align(line_, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(line_, LV_LABEL_LONG_MODE_DOTS);
     refresh_foot_();
   }
@@ -667,7 +679,7 @@ class ClockView : public PageView {
   void tick(esphome::ESPTime now) override {
     if (!now.is_valid()) {
       lv_label_set_text(time_, "");
-      strip_.set_left("");
+      lv_label_set_text(date_, "");
       set_hidden(waiting_, false);
       last_hm_.clear();
       return;
@@ -675,7 +687,7 @@ class ClockView : public PageView {
     if (g_nowhm == last_hm_) return;
     last_hm_ = g_nowhm;
     lv_label_set_text(time_, short_time(g_nowhm).c_str());
-    strip_.set_left(upper(date_text(now)));
+    lv_label_set_text(date_, date_text(now).c_str());
     set_hidden(waiting_, true);
   }
 
@@ -684,28 +696,25 @@ class ClockView : public PageView {
     return (hm.size() == 5 && hm[0] == '0') ? hm.substr(1) : hm;
   }
 
-  // "Monday 14 September". Built by hand: newlib's strftime has no day-without-padding format.
+  // "Fri 18 Sep". Built by hand: newlib's strftime has no day-without-padding format, and fixed
+  // English names keep the string ASCII whatever locale the runtime has.
   static std::string date_text(const esphome::ESPTime &now) {
-    static const char *DAYS[] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
-    static const char *MONTHS[] = {"January", "February", "March",     "April",   "May",      "June",
-                                   "July",    "August",   "September", "October", "November", "December"};
+    static const char *DAYS[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+    static const char *MONTHS[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
     int dow = (int) now.day_of_week - 1;
     int mon = (int) now.month - 1;
     if (dow < 0 || dow > 6 || mon < 0 || mon > 11) return "";
     return std::string(DAYS[dow]) + " " + std::to_string((int) now.day_of_month) + " " + MONTHS[mon];
   }
 
-
-  // Both worked out by PageHost from the document: the next thing in the diary, for the foot
-  // row, and the temperature, for the right of the strip. Either may be empty.
-  void set_line(const std::string &next, const std::string &temp) {
-    if (temp != temp_text_) {
-      temp_text_ = temp;
-      strip_.set_right(temp);
-    }
-    if (next == next_text_) return;
-    next_text_ = next;
-    refresh_foot_();
+  // The temperature PageHost works out from the document, shown centred under the numerals.
+  // Hidden rather than blank when the document has none.
+  void set_temp(const std::string &temp) {
+    if (temp == temp_text_) return;
+    temp_text_ = temp;
+    lv_label_set_text(temp_, temp_text_.c_str());
+    set_hidden(temp_, temp_text_.empty());
   }
   // A firmware notice ("Updating firmware 12%", "Updated to 1.3.0") takes the foot row for as
   // long as it is set, then hands it back. Nothing else interrupts the clock.
@@ -737,34 +746,20 @@ class ClockView : public PageView {
 
  private:
   // One row at the foot of the face, and three things that want it. A firmware update is the
-  // loudest, then the document's notice, then a live problem; while any of them applies the
-  // diary dot goes and what is left is a grey line.
+  // loudest, then the document's notice, then a live problem; the hairline and the line show
+  // together and hide together, since neither means anything without the other.
   void refresh_foot_() {
     const std::string &msg = !notice_.empty()       ? notice_
                              : !doc_notice_.empty() ? doc_notice_
                                                     : problem_text_;
-    if (!msg.empty()) {
-      lv_obj_set_pos(line_, 16, 440);
-      lv_obj_set_width(line_, 448);
-      lv_label_set_text(line_, msg.c_str());
-      set_tok(line_, T_CHALK70);
-      set_hidden(line_, false);
-      set_hidden(dot_, true);
-      set_hidden(rule_, false);
-      return;
-    }
-    lv_obj_set_pos(line_, 37, 440);
-    lv_obj_set_width(line_, 427);
-    lv_label_set_text(line_, next_text_.c_str());
-    set_tok(line_, T_TIME2);
-    set_hidden(line_, next_text_.empty());
-    set_hidden(dot_, next_text_.empty());
-    set_hidden(rule_, next_text_.empty());
+    lv_label_set_text(line_, msg.c_str());
+    set_hidden(line_, msg.empty());
+    set_hidden(rule_, msg.empty());
   }
 
-  lv_obj_t *time_ = nullptr, *waiting_ = nullptr, *rule_ = nullptr, *dot_ = nullptr;
-  lv_obj_t *line_ = nullptr;
-  std::string last_hm_, next_text_, temp_text_, notice_, problem_text_, doc_notice_;
+  lv_obj_t *date_ = nullptr, *time_ = nullptr, *temp_ = nullptr, *waiting_ = nullptr;
+  lv_obj_t *rule_ = nullptr, *line_ = nullptr;
+  std::string last_hm_, temp_text_, notice_, problem_text_, doc_notice_;
 };
 
 // ---- pairing: the only page besides the clock while the device is unclaimed. The QR encodes the
@@ -1992,10 +1987,7 @@ class PageHost {
     host_ = nullptr;
     cur_ = 0;
     ssid_.clear();
-    events_.clear();
     temp_.clear();
-    line_day_.clear();
-    line_hm_.clear();
   }
 
   // Reconcile the pages on screen with the document: reuse by id and type, create what is new,
@@ -2029,10 +2021,8 @@ class PageHost {
     // The document's notice goes on after the problem line has been cleared, so the arrival of a
     // document no longer wipes it: only a document without one does.
     clock->set_doc_notice(doc.notice);
-    read_clock_sources_(doc);
-    line_day_ = g_today;
-    line_hm_ = g_nowhm;
-    refresh_clock_line_();
+    read_temp_source_(doc);
+    clock->set_temp(temp_);
     layout_();
     size_t idx = cur_ < views_.size() ? cur_ : views_.size() - 1;
     if (!keep.empty()) {
@@ -2060,11 +2050,10 @@ class PageHost {
       pair.reset(new PairingView(host_));
       pair->set_night(night_);
     }
-    // The diary and the weather belonged to a household that no longer claims this device, and
-    // so did the notice.
-    events_.clear();
+    // The weather belonged to a household that no longer claims this device, and so did the
+    // notice.
     temp_.clear();
-    static_cast<ClockView *>(clock.get())->set_line("", "");
+    static_cast<ClockView *>(clock.get())->set_temp("");
     static_cast<ClockView *>(clock.get())->set_doc_notice("");
     static_cast<PairingView *>(pair.get())->set_code(code);
     views_.push_back(std::move(clock));
@@ -2139,13 +2128,6 @@ class PageHost {
       g_today = now.strftime("%Y%m%d");
       g_now_epoch = (uint32_t) now.timestamp;
       if (boot_) boot_->on_time_valid();
-      // The foot of the clock is about what is next, so it is rebuilt whenever the minute the
-      // events are measured against moves, and not only when a document lands.
-      if (g_today != line_day_ || g_nowhm != line_hm_) {
-        line_day_ = g_today;
-        line_hm_ = g_nowhm;
-        refresh_clock_line_();
-      }
     }
     for (auto &v : views_) v->tick(now);
   }
@@ -2215,7 +2197,7 @@ class PageHost {
   }
 
  private:
-  static constexpr size_t MAX_CONTENT = 8, MAX_CLOCK_EVENTS = 24;
+  static constexpr size_t MAX_CONTENT = 8;
 
   // The face a page gets. Three of them are generic pages as far as the document is concerned,
   // which is why the module decides between them and why it is remembered on the view.
@@ -2260,35 +2242,15 @@ class PageHost {
     if (boot_) boot_->raise();
   }
 
-  // ---- the clock's foot line
-  // The next thing in the diary and the temperature come off two pages the clock itself never
-  // sees, so they are worked out here. What a document contributes is kept, in the smallest
-  // shape that will do, because the line also has to be rebuilt as the day moves on.
-  struct ClockEvent {
-    std::string d, t, s;
-    bool all_day = false;
-  };
-
-  void read_clock_sources_(const Document &doc) {
-    events_.clear();
+  // ---- the clock's temperature
+  // The temperature comes off the weather page the clock itself never sees, so it is worked out
+  // here, the same way SkyView falls back to a `grows` row for a backend older than the `temp`
+  // field.
+  void read_temp_source_(const Document &doc) {
     temp_.clear();
     const Page *weather = nullptr;
     bool named = false;
     for (const Page &pg : doc.pages) {
-      // Only today and tomorrow are ever read and the backend sorts by day, so the first two
-      // dozen events of the first agenda page are always enough to find them.
-      if (pg.type == 'a' && events_.empty()) {
-        for (const AgendaEvent &e : pg.events) {
-          if (events_.size() >= MAX_CLOCK_EVENTS) break;
-          ClockEvent c;
-          c.d = e.d;
-          c.t = e.t;
-          c.s = e.s;
-          c.all_day = e.all_day;
-          events_.push_back(std::move(c));
-        }
-        continue;
-      }
       if (pg.type != 'g') continue;
       if (!named && pg.module == "weather") {
         weather = &pg;
@@ -2306,34 +2268,6 @@ class PageHost {
     // in for it, but only when it really is a number: `v` may be a day count or anything else.
     if (weather->grows.empty()) return;
     if (is_number(weather->grows[0].value)) temp_ = weather->grows[0].value + "\xC2\xB0";
-  }
-
-  // Today's next timed event, else today's first all-day one, else tomorrow's first. Empty when
-  // the document carried no agenda page, or the clock has not been set yet.
-  std::string next_event_() const {
-    if (events_.empty() || g_today.empty()) return "";
-    const ClockEvent *all_day = nullptr;
-    for (const auto &e : events_) {
-      if (e.d != g_today) continue;
-      if (e.all_day) {
-        if (all_day == nullptr) all_day = &e;
-        continue;
-      }
-      // Sorted by day and time, so the first one still to come is the next one.
-      if (e.t.size() == 5 && e.t > g_nowhm) return e.t + " " + e.s;
-    }
-    if (all_day != nullptr) return copy::ALL_DAY + (" \xC2\xB7 " + all_day->s);
-    std::string tomorrow = day_after(g_today);
-    if (tomorrow.empty()) return "";
-    for (const auto &e : events_)
-      if (e.d == tomorrow)
-        return copy::TOMORROW + (" \xC2\xB7 " + (e.all_day ? e.s : e.t + " " + e.s));
-    return "";
-  }
-
-  void refresh_clock_line_() {
-    if (views_.empty()) return;
-    static_cast<ClockView *>(views_[0].get())->set_line(next_event_(), temp_);
   }
 
 #if HB_CAROUSEL
@@ -2368,9 +2302,8 @@ class PageHost {
   // The boot overlay is never a page: it is owned here and destroyed once, on its own.
   std::unique_ptr<BootView> boot_;
   std::string ssid_;
-  // What the clock's foot line is built from, and the minute it was last built for.
-  std::vector<ClockEvent> events_;
-  std::string temp_, line_day_, line_hm_;
+  // What the clock's temperature is built from.
+  std::string temp_;
   size_t cur_ = 0;
   // Which palette the board is on, so a view built later starts on the same one.
   bool night_ = false;

@@ -44,7 +44,6 @@ inline constexpr const char *SKY_NO_FORECAST = "Can't reach the forecast.";
 // ---------------------------------------------------------------- rows
 // A diary row's second line, and the word in front of a temperature that is not the real one.
 inline constexpr const char *ALL_DAY = "All day";
-inline constexpr const char *TOMORROW = "Tomorrow";
 inline constexpr const char *FEELS = "feels ";
 
 // ---------------------------------------------------------------- the boot screen
