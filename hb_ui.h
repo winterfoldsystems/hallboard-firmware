@@ -1207,9 +1207,10 @@ class BootView {
 
 // ---- board: the departures or arrivals template, laid out as BoardFace in the design system.
 //
-// 16 px of padding all round, the strip every face has, then four rows with the design's 22 px
-// gap that fill the face to the bottom margin, each on its own card: rows at 60 (raised, 86 tall), 168, 274 and 380
-// (84 tall each, ending at 464), with the page dots over the last one while they show. A problem
+// 16 px of padding all round, the strip every face has, then four rows, each on its own card,
+// 12 px apart as the to-do list's are, that fill the face to the bottom margin: rows at 60
+// (raised), 164, 268 and 372, 92 tall each and ending at 464, with the page dots over the last
+// one while they show. A problem
 // line has no band of its own, so it takes the fourth row's place.
 //
 // The parser keeps five rows because the document may carry five; the fifth is not drawn, and
@@ -1306,9 +1307,9 @@ class BoardView : public PageView {
 
  private:
   // The face's geometry, from DepartureRow: rows 448 wide inside a 16 px margin, the first one
-  // raised and a little taller for its heavier type.
+  // raised.
   static const int PAD = 16, ROW_X = 16, ROW_W = 448;
-  static const int ROW0_Y = 60, ROW0_H = 86, ROW_H = 84, ROW_GAP = 22;
+  static const int ROW0_Y = 60, ROW0_H = 92, ROW_H = 92, ROW_GAP = 12;
 
   static int row_y(int i) {
     return i == 0 ? ROW0_Y : ROW0_Y + ROW0_H + ROW_GAP + (ROW_H + ROW_GAP) * (i - 1);
