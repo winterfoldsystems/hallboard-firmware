@@ -56,7 +56,7 @@ the UI changes and not otherwise.
 | `clock-notice` | The same with a `settings.notice` from the document, on the foot row |
 | `clock-problem` | The same with a live problem status on the foot row, which wins over a notice |
 | `clock-waiting-time` | SNTP never answered: no time, no date, "Setting the clock.", weather line still showing |
-| `clock-weather-long` | The widest realistic weather line, `-12° · Freezing rain · NW 23 mph`, checked against 448 px |
+| `clock-weather-long` | The widest realistic weather line, `-12° · Freezing rain · 23 mph NW`, checked against 448 px |
 | `board-live` | A rail departures board, five rows, one delayed |
 | `board-live-night` | The same board on the night palette |
 | `dots` | The same board a moment after a swipe, with the page indicator up |
@@ -69,11 +69,11 @@ the UI changes and not otherwise.
 | `day` | The agenda, today marked, spent events dropped, two later days |
 | `day-night` | The same diary on the night palette |
 | `day-empty` | The agenda with nothing in the next seven days |
-| `weather` | The weather face: the now/wind/rain cards, the headline and sentence, and the hours to come with an icon and a chance of rain each |
+| `weather` | The weather face: the now/wind/rain cards and the hours to come with an icon and a chance of rain each |
 | `weather-night` | The same forecast on the night palette |
 | `weather-rows-only` | A weather page from a backend older than the face: rows and nothing else |
 | `weather-hours-no-icon` | A backend older than the hourly icon row and the wind/rain cards: none of them draw |
-| `weather-long-sentence` | The longest realistic sentence (48 characters), the wind card's "gusts" clause and the hourly icon row: the tightest the cards, the text and the strip card ever get |
+| `weather-long-sentence` | The wind card's "gusts" clause and the hourly icon row: the fullest the cards and the strip card ever get (the name is from when the face also drew a sentence) |
 | `weather-scale` | Six slots cold to hot, -3 to 29 C: the bars' fixed temperature colour scale end to end |
 | `weather-scale-night` | The same scale on the night palette: same L and H, half the C |
 | `weather-calm` | `wspd` "0" (a reading, not an absence), no `wdir`, no `gust`, a low `rday`: the wind card's bare-number and no-gusts cases |

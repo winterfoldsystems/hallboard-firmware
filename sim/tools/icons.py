@@ -5,7 +5,7 @@ What this is for
 -----------------
 Rasterises the Meteocons SVGs vendored into firmware/icons/meteocons/ (see that directory's
 README for source, licence and the HallBoard-name-to-file mapping) into firmware/hb_icons.h: one
-LVGL A8 (alpha-only) image per icon per size the board draws, 28 px for the weather face's three
+LVGL A8 (alpha-only) image per icon per size the board draws, 32 px for the weather face's three
 cards and 24 px for the hourly strip.
 
 The Meteocons line set draws each icon in several stroke colours (amber suns, blue raindrops,
@@ -19,7 +19,7 @@ to one alpha channel, luminance-independent" means (this is not a greyscale/lumi
 which would have made amber and pale grey strokes read as different opacities).
 
 Every Meteocons icon carries a lot of empty air inside its own 64x64 viewBox (room for the
-animated wobble/sway/drift these are built for), which is exactly what a still 24-28 px board icon
+animated wobble/sway/drift these are built for), which is exactly what a still 24-32 px board icon
 cannot spare: drawn at the viewBox's own scale, the ink itself is a small blob in the middle of a
 mostly-transparent square. So before scaling to a target size, ink_bbox() below measures where the
 flattened icon's ink actually falls (in SVG viewBox units, off a single fixed-resolution reference
@@ -68,9 +68,9 @@ FIRMWARE = HERE.parent.parent
 ICON_DIR = FIRMWARE / "icons" / "meteocons"
 OUT = FIRMWARE / "hb_icons.h"
 
-# The board only ever draws icons at these two sizes: 28 px on a weather card, 24 px in the
+# The board only ever draws icons at these two sizes: 32 px on a weather card, 24 px in the
 # hourly strip.
-SIZES = (28, 24)
+SIZES = (32, 24)
 SUPERSAMPLE = 4
 # A fixed resolution to measure each icon's ink at, independent of either target size, so both
 # sizes crop to the same square. 8x the 64-unit viewBox is more than enough precision.
@@ -179,7 +179,7 @@ def render_header():
         "// Regenerate with:",
         "//     firmware/sim/.venv/bin/python3 firmware/sim/tools/icons.py",
         "//",
-        "// Every icon is an LVGL A8 (alpha-only) image, one entry per icon per size (28 px for a",
+        "// Every icon is an LVGL A8 (alpha-only) image, one entry per icon per size (32 px for a",
         "// weather card, 24 px for the hourly strip), cropped to its own ink and rescaled so the ink",
         "// fills the size: the Meteocons line icons are drawn in several stroke colours and a lot of",
         "// empty viewBox air, which icons.py flattens to a single coverage mask and crops away, so the",

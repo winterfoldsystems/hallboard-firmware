@@ -11,8 +11,6 @@
      ],
      "place": "Godalming", "temp": "3", "feels": "-1",
      "wdir": "SW", "wspd": "12", "gust": "24", "rday": 40,
-     "head": "Frost, then sunshine",
-     "sent": "Mild but breezy, showers arriving mid afternoon.",
      "hours": [
        {"h": "10", "t": "4", "r": 5, "i": "partly"},
        {"h": "12", "t": "7", "r": 10, "i": "partly"},

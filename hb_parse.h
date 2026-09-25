@@ -127,8 +127,6 @@ inline bool parse_screen(const std::string &body, hb::Document &out) {
       p.place = jstr(pg["place"], 24);
       p.temp = jstr(pg["temp"], 6);
       p.feels = jstr(pg["feels"], 6);
-      p.head = jstr(pg["head"], 24);
-      p.sent = jstr(pg["sent"], 64);
       // Current conditions and wind, for the clock's one-line summary under the numerals. Both
       // optional, both absent on a backend older than this field.
       p.cond = jstr(pg["cond"], 24);

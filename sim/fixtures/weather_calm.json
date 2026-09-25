@@ -11,7 +11,6 @@
      ],
      "place": "Godalming", "temp": "9", "feels": "8",
      "wspd": "0", "rday": 5,
-     "head": "Fog, then clear", "sent": "Misty start, clearing by mid-morning.",
      "hours": [
        {"h": "06", "t": "8", "r": 5, "i": "fog"},
        {"h": "08", "t": "9", "r": 5, "i": "fog"},

@@ -314,13 +314,13 @@ const Scenario SCENARIOS[] = {
     // the strip have anything to draw.
     {"weather-rows-only", [](Sim &s) { booted(s, "weather_rows_only.json", 1); }},
     // A backend older than the hourly icon row and the wind/rain cards: hours with no `i` on any
-    // of them and no `wdir`/`wspd`/`gust`/`rday` on the page at all. No hourly icon row, the wind
-    // and rain cards icon-only, and the strip card exactly the height it always was.
+    // of them and no `wdir`/`wspd`/`gust`/`rday` on the page at all. No hourly icon row and no
+    // hairline under one, the wind and rain cards icon-only, and the room the icon row would have
+    // taken shared between the bars and the gaps in the strip card.
     {"weather-hours-no-icon", [](Sim &s) { booted(s, "weather_hours_no_icon.json", 1); }},
-    // The longest realistic sentence (48 characters; it turns out to stay one line at this width
-    // and font, but is the true worst case the contract allows), with the wind card's "gusts"
-    // clause and the hourly icon row: the tightest the cards, the text block and the strip card
-    // ever get.
+    // The wind card's "gusts" clause and the hourly icon row: the fullest the cards and the strip
+    // card ever get. The name is from when the face also drew a sentence under the cards, which
+    // this fixture carried the longest realistic one of.
     {"weather-long-sentence", [](Sim &s) { booted(s, "weather_long_sentence.json", 1); }},
     // Six slots cold to hot, -3 to 29 C: the temperature colour scale end to end, which the other
     // fixtures never show since screen_full.json only spans 14-18 C.

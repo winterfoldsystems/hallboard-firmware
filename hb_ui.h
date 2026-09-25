@@ -84,7 +84,7 @@ struct Page {
   // `cond` and `wind` for its own one-line summary. `wdir`/`wspd`/`gust` are the wind card's own
   // (current conditions' icon is `grows[0].icon`); `rday` is today's chance of rain, -1 when the
   // backend sent none, which is not the same as 0.
-  std::string place, temp, feels, head, sent, cond, wind, wdir, wspd, gust;
+  std::string place, temp, feels, cond, wind, wdir, wspd, gust;
   int rday = -1;
   std::vector<HourSlot> hours;
 };
@@ -1630,8 +1630,8 @@ class AgendaView : public PageView {
 // ---- sky: the weather face, laid out as SkyFace in the design system.
 //
 // 16 px of padding, the place and the stamp on a 28 px header, three cards (now, wind, today's
-// rain), a headline and a sentence under them, and the hours to come as a strip of bars along
-// the bottom.
+// rain), and the hours to come as a strip of bars in a card that fills the rest of the face
+// down to the bottom margin.
 //
 // Icons are Meteocons line icons (firmware/icons/meteocons/), rasterised offline by
 // firmware/sim/tools/icons.py into hb_icons.h as A8 alpha masks, drawn with lv_image and
@@ -1644,10 +1644,6 @@ class SkyView : public PageView {
     strip_.build(root_, margin_);
     strip_.set_dot(T_WEATHER);
     build_cards_();
-    head_ = mk_label(root_, margin_, HEAD_BOTTOM, TEXT_W, 0, F(g_fonts.sans500_20), T_HEADLINE, "");
-    lv_label_set_long_mode(head_, LV_LABEL_LONG_MODE_DOTS);
-    sent_ = mk_label(root_, margin_, HEAD_BOTTOM, TEXT_W, 0, F(g_fonts.sans400_18), T_CHALK70, "");
-    lv_label_set_long_mode(sent_, LV_LABEL_LONG_MODE_WRAP);
     build_strip_();
     empty_.build(root_, margin_, HEAD_BOTTOM + 40, TEXT_W);
     build_problem_();
@@ -1656,26 +1652,19 @@ class SkyView : public PageView {
   void apply(const Page &pg) override {
     strip_.set_left(pg.place.empty() ? std::string(copy::WEATHER) : upper(pg.place), T_WEATHER);
 
-    std::string temp = pg.temp, feels = pg.feels, head = pg.head, sent = pg.sent;
+    std::string temp = pg.temp, feels = pg.feels;
     bool hours = !temp.empty() && !pg.hours.empty();
     if (temp.empty()) {
       // A document from a backend older than this face, or one cached before it: the first row's
-      // big value is the temperature and its second line is all the headline there is. Nothing
-      // else on the page can be trusted to be about the weather, so nothing else is shown, and
-      // the wind and rain cards fall back to their icon-only state since wspd and rday cannot
-      // have arrived either.
-      if (!pg.grows.empty() && is_number(pg.grows[0].value)) {
-        temp = pg.grows[0].value;
-        head = pg.grows[0].b;
-      }
+      // big value is the temperature. Nothing else on the page can be trusted to be about the
+      // weather, so nothing else is shown, and the wind and rain cards fall back to their
+      // icon-only state since wspd and rday cannot have arrived either.
+      if (!pg.grows.empty() && is_number(pg.grows[0].value)) temp = pg.grows[0].value;
       feels.clear();
-      sent.clear();
     }
     lv_obj_t *card_roots[CARDS] = {cards_[0].root, cards_[1].root, cards_[2].root};
     if (temp.empty()) {
       for (lv_obj_t *o : card_roots) set_hidden(o, true);
-      set_hidden(head_, true);
-      set_hidden(sent_, true);
       set_hidden(card_, true);
       empty_.set(copy::OFFLINE, copy::SKY_NO_FORECAST);
       return;
@@ -1683,11 +1672,6 @@ class SkyView : public PageView {
     empty_.hide();
     for (lv_obj_t *o : card_roots) set_hidden(o, false);
     fill_cards_(pg, temp, feels);
-    label_text(head_, head);
-    label_text(sent_, sent);
-    set_hidden(head_, head.empty());
-    set_hidden(sent_, sent.empty());
-    int text_bottom = layout_text_();
     set_hidden(card_, !hours);
     if (hours) {
       // An older backend sends no `i` on any slot: a row only exists when at least one slot has
@@ -1698,7 +1682,7 @@ class SkyView : public PageView {
           any_icon = true;
           break;
         }
-      layout_strip_(any_icon, text_bottom);
+      layout_strip_(any_icon, CARDS_Y + cards_h_);
       fill_strip_(pg.hours);
     }
   }
@@ -1717,22 +1701,22 @@ class SkyView : public PageView {
 
  private:
   // The face's geometry: the header ends at 44, the strip card's bottom sits on the 16 px margin,
-  // the three cards sit right under the header, and the headline and sentence run below them.
-  static const int HEAD_BOTTOM = 44, TEXT_W = 448, GAP = 10;
+  // the three cards start at 60, the same line the train board's first row and a list's first
+  // row start on, and the strip card takes everything between them and that bottom margin.
+  static const int HEAD_BOTTOM = 44, CARDS_Y = 60, TEXT_W = 448;
 
   // ---- the three cards: SkyFace's now/wind/rain row. 16 px side margins and 8 px between them
   // leaves (448 - 16) / 3 = 144 px wide each; 16 px corners, the same radius as the hourly card.
-  // Every card has the same three rows, left aligned: a 28 px icon (with an optional short label
-  // beside it, centred on the icon), one big value, one small line. 10 px padding and a 1 px gap
-  // either side of the value row (rather than the 12 px padding and 8/4 px gaps an earlier pass
-  // used with a 32 px icon) is what brings the card down to 126 px tall without the value or the
-  // sub line touching anything: both still sit inside their own font's line height, which already
-  // carries a little internal leading above and below the ink. A card's own height never depends
-  // on its data, only on the four numbers below and the three fonts involved, so it is worked out
-  // once, in build_cards_, and never revisited.
-  static const int CARDS = 3, CARD_GAP = 8, CARD_PAD = 10, CARD_RADIUS = 16;
+  // Every card has the same three rows, left aligned: a 32 px icon (with an optional short label
+  // beside it, centred on the icon), one big value, one small line. 12 px padding, 8 px between
+  // the icon and the value row and 4 px between the value and the sub line make the card 144 px
+  // tall. A pass that also fitted a headline and a sentence under the cards squeezed these to
+  // 10 px, a 28 px icon and 1/1 px gaps; with those gone the room came back. A card's own height
+  // never depends on its data, only on the numbers below and the three fonts involved, so it is
+  // worked out once, in build_cards_, and never revisited.
+  static const int CARDS = 3, CARD_GAP = 8, CARD_PAD = 12, CARD_RADIUS = 16;
   static const int CARD_W = (TEXT_W - (CARDS - 1) * CARD_GAP) / CARDS;
-  static const int CARD_ICON = 28, ICON_LABEL_GAP = 6, CARD_ROW_GAP1 = 1, CARD_ROW_GAP2 = 1;
+  static const int CARD_ICON = 32, ICON_LABEL_GAP = 6, CARD_ROW_GAP1 = 8, CARD_ROW_GAP2 = 4;
 
   struct Card {
     lv_obj_t *root = nullptr, *icon = nullptr, *label = nullptr, *value = nullptr, *sub = nullptr;
@@ -1746,7 +1730,7 @@ class SkyView : public PageView {
     for (int i = 0; i < CARDS; i++) {
       Card &c = cards_[i];
       int x = margin_ + i * (CARD_W + CARD_GAP);
-      c.root = mk_panel(root_, x, HEAD_BOTTOM, CARD_W, cards_h_, T_CARD, CARD_RADIUS);
+      c.root = mk_panel(root_, x, CARDS_Y, CARD_W, cards_h_, T_CARD, CARD_RADIUS);
       c.icon = mk_icon(c.root, CARD_PAD, CARD_PAD, T_CHALK);
       int label_x = CARD_PAD + CARD_ICON + ICON_LABEL_GAP;
       c.label = mk_label(c.root, label_x, CARD_PAD + (CARD_ICON - label_h) / 2, CARD_W - label_x - CARD_PAD,
@@ -1756,7 +1740,7 @@ class SkyView : public PageView {
       c.value = mk_label(c.root, CARD_PAD, value_y, CARD_W - 2 * CARD_PAD, value_h, F(g_fonts.sans600_46),
                           T_CHALK, "");
       // The card's own numbers never need it (fig600_46 was sized for "-12°" and "100%" to both
-      // fit at 120 px, and 10 px padding leaves 124), but the sub line's "mph, gusts " plus up to
+      // fit at 120 px, and 12 px padding leaves exactly 120), but the sub line's "mph, gusts " plus up to
       // 4 more characters can, on an unrealistically wide gust reading, so it gets the same
       // truncate-with-dots every other label that might overflow in this file uses, rather than a
       // hard, ellipsis-less clip.
@@ -1801,45 +1785,26 @@ class SkyView : public PageView {
     set_hidden(rain.sub, !has_rain);
   }
 
-  // The headline and the sentence sit directly under the cards, in a fixed stack (no more
-  // centring: the cards are always there once there is a temperature, unlike the old hero, so
-  // there is nothing left to centre against). Returns where the last visible line ends, which is
-  // as far down as layout_strip_ is allowed to let the hourly card's top come.
-  int layout_text_() {
-    lv_obj_update_layout(root_);
-    int head_h = lv_obj_has_flag(head_, LV_OBJ_FLAG_HIDDEN) ? 0 : lv_obj_get_height(head_);
-    int sent_h = lv_obj_has_flag(sent_, LV_OBJ_FLAG_HIDDEN) ? 0 : lv_obj_get_height(sent_);
-    int y = HEAD_BOTTOM + cards_h_;
-    if (head_h > 0) {
-      y += GAP;
-      lv_obj_set_pos(head_, margin_, y);
-      y += head_h;
-    }
-    if (sent_h > 0) {
-      y += GAP;
-      lv_obj_set_pos(sent_, margin_, y);
-      y += sent_h;
-    }
-    return y;
-  }
-
-  // The strip card, from SkyFace: six columns 60 wide with 8 between them inside 24 of padding,
-  // and a bar area up to 60 tall. The six columns measure 400 on a 68 pitch, which is what
-  // centres them in the 448 card. The card is taller than the design's 128 because a rasterised
-  // 16 px label and a 14 px one need more room than the mock's line boxes did.
+  // The strip card, from SkyFace: six columns 60 wide with 8 between them inside 24 of padding.
+  // The six columns measure 400 on a 68 pitch, which is what centres them in the 448 card.
   //
-  // Above the hairline, top to bottom: a 24 px icon row, when the document has any, then the
-  // chance of rain, always. A backend sending no icon draws no icon row and reserves no room for
-  // it, so the card is exactly the height it always was. layout_strip_ works this out, and how
-  // tall the bars can be, every time a document arrives: the card grows upward first, and only
-  // trims the bar area down towards BAR_MIN if that still leaves less than SENT_GAP under the
-  // headline/sentence block's last line. The wind row this card once had (a per-slot "SW 12"
-  // under the rain percentages) is gone: the backend stopped sending hourly wind, and the room it
-  // held goes back to the bars.
-  static const int COLS = 6, COL_W = 60, COL_PITCH = 68, CARD_PAD2 = 24, BAR_MAX = 60, BAR_MIN = 22, SEP = 9, RAIN_GAP = 16, CARD_FOOT = 14;
-  static const int STRIP_ICON = 24;
-  // The least the text block's last line and the top of the hourly card are ever left apart.
-  static const int SENT_GAP = 16;
+  // The card's top sits STRIP_GAP under the three cards and its bottom on the 16 px margin, so
+  // its height is fixed by the cards, not by its contents. Inside it, top to bottom: a 24 px icon
+  // row and a hairline under it, when the document has any icons, then the chance of rain and a
+  // second hairline, then the temperatures over their bars and the hours under them. A backend
+  // sending no icon draws no icon row and no first hairline. layout_strip_ works out what the
+  // room left over from the fixed rows buys every time a document arrives: the bars grow up to
+  // BAR_MAX, and anything beyond that is shared between the gaps either side of the hairlines,
+  // so the rows spread out rather than the card gaining empty padding. The wind row this card
+  // once had (a per-slot "SW 12" under the rain percentages) is gone: the backend stopped sending
+  // hourly wind, and the room it held goes back to the bars.
+  static const int COLS = 6, COL_W = 60, COL_PITCH = 68, CARD_PAD2 = 24, BAR_MAX = 88, BAR_MIN = 22, SEP = 9, RAIN_GAP = 16, CARD_FOOT = 14;
+  // The icon row and the gap under it. The gap is a little wider than SEP because an icon's ink
+  // runs to within a pixel of its box, where a line of text carries its own leading: 12 px, with
+  // the hairline in the middle of it, leaves the same clear space above and below that hairline.
+  static const int STRIP_ICON = 24, ICON_SEP = 12;
+  // Between the three cards and the top of the strip card, the same 16 px as the side margins.
+  static const int STRIP_GAP = 16;
 
   struct Col {
     lv_obj_t *root = nullptr, *icon = nullptr, *temp = nullptr, *bar = nullptr, *hour = nullptr,
@@ -1850,81 +1815,84 @@ class SkyView : public PageView {
     std::string temp_str;
   };
 
+  // Makes the card and its columns; every position inside them is layout_strip_'s, which runs
+  // here once for the no-icon layout and again for each document. Nothing shows the card before
+  // the first document anyway, since it starts hidden.
   void build_strip_() {
     int hh = lv_font_get_line_height(F(g_fonts.sans500_16));
-    int th = hh;
-    // The one-row, full-height layout: what the card looks like until the first document sets its
-    // real geometry through layout_strip_, which nothing shows before then since the card starts
-    // hidden.
-    int top = hh + SEP + RAIN_GAP;
-    int inner = top + th + 6 + BAR_MAX + 6 + hh;
-    card_h_ = inner + CARD_PAD2 + CARD_FOOT;
-    card_y_ = 480 - margin_ - card_h_;
-    card_ = mk_panel(root_, margin_, card_y_, TEXT_W, card_h_, T_CARD, 16);
+    card_ = mk_panel(root_, margin_, 0, TEXT_W, 0, T_CARD, 16);
     set_hidden(card_, true);
     for (int i = 0; i < COLS; i++) {
       Col &c = cols_[i];
-      c.root = mk_obj(card_, CARD_PAD2 + COL_PITCH * i, CARD_PAD2, COL_W, inner);
+      c.root = mk_obj(card_, CARD_PAD2 + COL_PITCH * i, CARD_PAD2, COL_W, 0);
       c.icon = mk_icon(c.root, (COL_W - STRIP_ICON) / 2, 0, T_CHALK70);
       c.rain = mk_label(c.root, 0, 0, COL_W, hh, F(g_fonts.sans500_16), T_HOUR, "");
       lv_obj_set_style_text_align(c.rain, LV_TEXT_ALIGN_CENTER, 0);
-      c.temp = mk_label(c.root, 0, top, COL_W, th, F(g_fonts.sans500_16), T_HEADLINE, "");
+      c.temp = mk_label(c.root, 0, 0, COL_W, hh, F(g_fonts.sans500_16), T_HEADLINE, "");
       lv_obj_set_style_text_align(c.temp, LV_TEXT_ALIGN_CENTER, 0);
       // Anchored at the bottom of the bar area, which is what makes a row of bars a chart.
-      c.bar = mk_panel(c.root, 0, top + th + 6, COL_W, BAR_MAX, T_WEATHER, 4);
-      c.hour = mk_label(c.root, 0, top + th + 12 + BAR_MAX, COL_W, hh, F(g_fonts.sans500_16), T_HOUR, "");
+      c.bar = mk_panel(c.root, 0, 0, COL_W, BAR_MIN, T_WEATHER, 4);
+      c.hour = mk_label(c.root, 0, 0, COL_W, hh, F(g_fonts.sans500_16), T_HOUR, "");
       lv_obj_set_style_text_align(c.hour, LV_TEXT_ALIGN_CENTER, 0);
       set_hidden(c.root, true);
     }
-    // One hairline across the six columns, under the chances of rain (and the icon row, once a
-    // document turns it on: layout_strip_ is what moves the hairline down to make room for it).
-    hairline_ = mk_rule(card_, CARD_PAD2, CARD_PAD2 + hh + SEP / 2, COL_PITCH * (COLS - 1) + COL_W, T_LINE);
-    bar_top_ = top + th + 6;
-    temp_h_ = th;
-    bar_max_ = BAR_MAX;
+    // Two hairlines across the six columns: one under the icon row, only while there is one, and
+    // one under the chances of rain, always.
+    int rule_w = COL_PITCH * (COLS - 1) + COL_W;
+    icon_rule_ = mk_rule(card_, CARD_PAD2, 0, rule_w, T_LINE);
+    hairline_ = mk_rule(card_, CARD_PAD2, 0, rule_w, T_LINE);
+    layout_strip_(false, CARDS_Y + cards_h_);
   }
 
   // Recomputes the strip card's vertical geometry for the document that just arrived: whether the
-  // icon row is drawn, and how tall the bars can be. Must run after layout_text_ (`text_bottom`
-  // is its return value) and before fill_strip_, which knows each bar's own height and so
-  // positions c.temp itself. See the comment on the geometry constants above for the two-step
-  // rule this follows.
-  void layout_strip_(bool any_icon, int text_bottom) {
+  // icon row and its hairline are drawn, how tall the bars can be, and how far apart the rows
+  // sit. `cards_bottom` is where the three cards end. Must run before fill_strip_, which knows
+  // each bar's own height and so positions c.temp itself. See the comment on the geometry
+  // constants above for the rule this follows.
+  void layout_strip_(bool any_icon, int cards_bottom) {
     int hh = lv_font_get_line_height(F(g_fonts.sans500_16));
     int th = hh;
-    // Icon row first (24 px, its own size, not a line height), then rain (always).
-    int pre_hair_h = (any_icon ? STRIP_ICON : 0) + hh;
-    int top = pre_hair_h + SEP + RAIN_GAP;
-    int bar_max = BAR_MAX;
-    int inner = 0, card_h = 0, card_y = 0;
-    for (;;) {
-      inner = top + th + 6 + bar_max + 6 + hh;
-      card_h = inner + CARD_PAD2 + CARD_FOOT;
-      card_y = 480 - margin_ - card_h;
-      if (text_bottom + SENT_GAP <= card_y || bar_max <= BAR_MIN) break;
-      bar_max--;
-    }
-    card_h_ = card_h;
-    card_y_ = card_y;
+    card_y_ = cards_bottom + STRIP_GAP;
+    card_h_ = 480 - margin_ - card_y_;
+    int inner = card_h_ - CARD_PAD2 - CARD_FOOT;
+    // Everything in a column but the bars and the room between the rows: the icon row (24 px, its
+    // own size, not a line height) and its hairline's gap, then rain, its hairline's gap, the gap
+    // down to the temperatures, the temperature, 6 px either side of the bar area, and the hour.
+    int fixed = (any_icon ? STRIP_ICON + ICON_SEP : 0) + hh + SEP + RAIN_GAP + th + 6 + 6 + hh;
+    int bar_max = inner - fixed;
+    if (bar_max > BAR_MAX) bar_max = BAR_MAX;
+    if (bar_max < BAR_MIN) bar_max = BAR_MIN;
+    // What is left over is shared between the gaps around the hairlines and the one down to the
+    // temperatures, so the rows spread out evenly; any odd pixels go to that last gap.
+    int spare = inner - fixed - bar_max;
+    if (spare < 0) spare = 0;
+    int gaps = any_icon ? 3 : 2;
+    int each = spare / gaps;
+    int sep = SEP + each;
+    int rain_gap = RAIN_GAP + spare - each * (gaps - 1);
+    int icon_sep = ICON_SEP + each;
+    int rain_y = any_icon ? STRIP_ICON + icon_sep : 0;
+    int top = rain_y + hh + sep + rain_gap;
     bar_top_ = top + th + 6;
     temp_h_ = th;
     bar_max_ = bar_max;
     lv_obj_set_pos(card_, margin_, card_y_);
     lv_obj_set_size(card_, TEXT_W, card_h_);
-    lv_obj_set_pos(hairline_, CARD_PAD2, CARD_PAD2 + pre_hair_h + SEP / 2);
-    int rain_y0 = any_icon ? STRIP_ICON : 0;
+    set_hidden(icon_rule_, !any_icon);
+    lv_obj_set_pos(icon_rule_, CARD_PAD2, CARD_PAD2 + STRIP_ICON + icon_sep / 2);
+    lv_obj_set_pos(hairline_, CARD_PAD2, CARD_PAD2 + rain_y + hh + sep / 2);
     for (int i = 0; i < COLS; i++) {
       Col &c = cols_[i];
       lv_obj_set_height(c.root, inner);
-      lv_obj_set_y(c.rain, rain_y0);
+      lv_obj_set_y(c.rain, rain_y);
       // c.temp is repositioned per column in fill_strip_, which runs right after this and knows
       // each bar's own height; c.hour sits below the whole bar area, the same for every column.
-      lv_obj_set_y(c.hour, top + th + 12 + bar_max);
+      lv_obj_set_y(c.hour, bar_top_ + bar_max + 6);
     }
   }
 
   // The focus column is the first hour at half a chance of rain or more, which is the hour the
-  // sentence is about. With nothing above half, the next hour is the one to read. A bar's height
+  // household most needs to know about. With nothing above half, the next hour is the one to read. A bar's height
   // is the temperature, because the number over it is: the warmest of the six slots is the full
   // height and the coldest about a third of it, so the strip reads as a day warming and cooling.
   // The bar's colour is a second, independent read of the same number: temp_bar_color's fixed
@@ -1978,8 +1946,7 @@ class SkyView : public PageView {
     }
   }
 
-  lv_obj_t *head_ = nullptr, *sent_ = nullptr;
-  lv_obj_t *card_ = nullptr, *hairline_ = nullptr;
+  lv_obj_t *card_ = nullptr, *icon_rule_ = nullptr, *hairline_ = nullptr;
   Card cards_[CARDS];
   Col cols_[COLS];
   EmptyCard empty_;

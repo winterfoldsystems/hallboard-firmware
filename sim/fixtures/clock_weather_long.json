@@ -9,8 +9,7 @@
      "rows": [
        {"i": "snow", "v": "-12", "a": "Now", "b": "Freezing rain . high -8 . low -14"}
      ],
-     "place": "Godalming", "temp": "-12", "feels": "-18", "cond": "Freezing rain", "wind": "NW 23 mph",
-     "head": "Freezing rain, then snow", "sent": "Roads are icy, take it easy out there."}
+     "place": "Godalming", "temp": "-12", "feels": "-18", "cond": "Freezing rain", "wind": "23 mph NW"}
   ],
   "settings": {
     "brightness": 90,

@@ -11,7 +11,6 @@
      ],
      "place": "Godalming", "temp": "11", "feels": "9",
      "wdir": "N", "wspd": "8", "rday": 5,
-     "head": "Clear all day", "sent": "Cold start, warming fast through the day.",
      "hours": [
        {"h": "04", "t": "-3", "r": 0, "i": "night"},
        {"h": "08", "t": "4", "r": 5, "i": "sun"},
