@@ -26,7 +26,7 @@
 
 substitutions:
   backend_base: "https://api.hallboard.co.uk"
-  fw_version: "1.4.7"
+  fw_version: "1.4.8"
 
 esphome:
   name: hallboard
