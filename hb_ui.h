@@ -130,10 +130,10 @@ inline int hhmm_to_minutes(const std::string &s) {
 struct FontSet {
   const lv_font_t *clock168 = nullptr;   // Figtree 600, the clock face
   const lv_font_t *sans600_46 = nullptr;  // Figtree 600, a weather card's big value
-  const lv_font_t *sans600_30 = nullptr;
+  const lv_font_t *sans600_28 = nullptr;
   const lv_font_t *sans600_24 = nullptr;
   const lv_font_t *sans600_20 = nullptr;
-  const lv_font_t *sans500_28 = nullptr;  // Figtree 500, a board row below the first
+  const lv_font_t *sans500_26 = nullptr;  // Figtree 500, a board row below the first
   const lv_font_t *sans500_22 = nullptr;
   const lv_font_t *sans500_20 = nullptr;
   const lv_font_t *sans500_18 = nullptr;
@@ -1317,9 +1317,9 @@ class BoardView : public PageView {
   static const int PAD = 16, ROW_X = 16, ROW_W = 448;
   static const int ROW0_Y = 60, ROW0_H = 92, ROW_H = 92, ROW_GAP = 12;
   // Columns inside a row, measured off ROW_W so the row follows the page's margin: 16 of padding
-  // at either end, an 86 px time, a 12 px gap, and the platform at the far end, at most 96 wide
+  // at either end, an 80 px time, a 12 px gap, and the platform at the far end, at most 96 wide
   // and 12 px clear of the destination.
-  static const int RPAD = 16, TIME_W = 86, TEXT_X = 114, PLAT_MAX = 96, PLAT_GAP = 12;
+  static const int RPAD = 16, TIME_W = 80, TEXT_X = 108, PLAT_MAX = 96, PLAT_GAP = 12;
 
   static int row_y(int i) {
     return i == 0 ? ROW0_Y : ROW0_Y + ROW0_H + ROW_GAP + (ROW_H + ROW_GAP) * (i - 1);
@@ -1340,20 +1340,19 @@ class BoardView : public PageView {
     int h = row_h(i), y = row_y(i);
     bool first = i == 0;
     // The destination and its status are centred in the row's height.
-    // The first row is Figtree 600/30, the rest 500/28, and every status 500/22: sizes that leave
-    // about 13 px above and below the text in a 92 px card.
-    const int dest_h = first ? 36 : 34, status_h = 28;
-    const lv_font_t *line_font = F(first ? g_fonts.sans600_30 : g_fonts.sans500_28);
+    // The first row is Figtree 600/28, the rest 500/26, and every status 500/20.
+    const int dest_h = first ? 34 : 32, status_h = 25;
+    const lv_font_t *line_font = F(first ? g_fonts.sans600_28 : g_fonts.sans500_26);
     int pad = (h - (dest_h + 2 + status_h)) / 2;
     // Every row is a card: the first raised, the rest on the weather face's resting card colour.
     r.box = mk_panel(root_, ROW_X, y, ROW_W, h, first ? T_RAISED : T_CARD, 16);
     const int rpad = RPAD, time_w = TIME_W, text_x = TEXT_X;
     // The time is set as the destination is, so the line reads as one. Figtree's figures are not
-    // all one width, so the column is as wide as the widest time ("00:00" at 600/30) and the
+    // all one width, so the column is as wide as the widest time ("00:00" at 600/28) and the
     // destinations start from the same place whatever the time is.
     r.time = mk_label(r.box, rpad, pad, time_w, dest_h, line_font, first ? T_CHALK : T_TIME2);
     // The revised time of a late train, under the booked one and on the status's line.
-    r.expected = mk_label(r.box, rpad, pad + dest_h + 2, time_w, status_h, F(g_fonts.sans500_22),
+    r.expected = mk_label(r.box, rpad, pad + dest_h + 2, time_w, status_h, F(g_fonts.sans500_20),
                           T_CHALK70);
     set_hidden(r.expected, true);
     r.dest = mk_label(r.box, text_x, pad, ROW_W - rpad - text_x, dest_h, line_font,
@@ -1362,7 +1361,7 @@ class BoardView : public PageView {
     // The status is set in Figtree rather than mono: at a size worth reading from the hall a
     // monospaced "09:04 . Delayed . 10 coaches . SWR" does not fit the row, and this does.
     r.status = mk_label(r.box, text_x, pad + dest_h + 2, ROW_W - rpad - text_x, status_h,
-                        F(g_fonts.sans500_22), T_CHALK70);
+                        F(g_fonts.sans500_20), T_CHALK70);
     lv_label_set_long_mode(r.status, LV_LABEL_LONG_MODE_DOTS);
     r.plat = mk_label(r.box, 0, pad, 0, dest_h, line_font, first ? T_CHALK : T_CHALK70);
     lv_obj_set_style_max_width(r.plat, PLAT_MAX, 0);

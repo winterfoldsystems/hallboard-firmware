@@ -26,10 +26,10 @@ lvgl:
         # every font a page can use is anchored here.
         - label: {id: anchor_fig600_168, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig600_168, hidden: true}
         - label: {id: anchor_fig600_46, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig600_46, hidden: true}
-        - label: {id: anchor_fig600_30, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig600_30, hidden: true}
+        - label: {id: anchor_fig600_28, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig600_28, hidden: true}
         - label: {id: anchor_fig600_24, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig600_24, hidden: true}
         - label: {id: anchor_fig600_20, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig600_20, hidden: true}
-        - label: {id: anchor_fig500_28, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig500_28, hidden: true}
+        - label: {id: anchor_fig500_26, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig500_26, hidden: true}
         - label: {id: anchor_fig500_22, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig500_22, hidden: true}
         - label: {id: anchor_fig500_20, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig500_20, hidden: true}
         - label: {id: anchor_fig500_18, x: 0, y: 0, width: 1, height: 1, text: "", text_font: fig500_18, hidden: true}
@@ -615,17 +615,18 @@ font:
     size: 46
     bpp: 4
     glyphs: ["0123456789°%-"]
+  # The time, destination and platform on a board's first row.
   - file: "gfonts://Figtree@600"
-    id: fig600_30
-    size: 30
+    id: fig600_28
+    size: 28
     bpp: 4
     glyphs: &text_glyphs
       - " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
       - "°·–—…"
   # The time, destination and platform on a board's rows below the first.
   - file: "gfonts://Figtree@500"
-    id: fig500_28
-    size: 28
+    id: fig500_26
+    size: 26
     bpp: 4
     glyphs: *text_glyphs
   - file: "gfonts://Figtree@600"
