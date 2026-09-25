@@ -60,6 +60,7 @@ esphome:
           hb::g_fonts.sans600_30 = id(fig600_30)->get_lv_font();
           hb::g_fonts.sans600_24 = id(fig600_24)->get_lv_font();
           hb::g_fonts.sans600_20 = id(fig600_20)->get_lv_font();
+          hb::g_fonts.sans500_28 = id(fig500_28)->get_lv_font();
           hb::g_fonts.sans500_22 = id(fig500_22)->get_lv_font();
           hb::g_fonts.sans500_20 = id(fig500_20)->get_lv_font();
           hb::g_fonts.sans500_18 = id(fig500_18)->get_lv_font();

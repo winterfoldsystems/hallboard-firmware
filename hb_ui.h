@@ -133,6 +133,7 @@ struct FontSet {
   const lv_font_t *sans600_30 = nullptr;
   const lv_font_t *sans600_24 = nullptr;
   const lv_font_t *sans600_20 = nullptr;
+  const lv_font_t *sans500_28 = nullptr;  // Figtree 500, a board row below the first
   const lv_font_t *sans500_22 = nullptr;
   const lv_font_t *sans500_20 = nullptr;
   const lv_font_t *sans500_18 = nullptr;
@@ -1268,6 +1269,11 @@ class BoardView : public PageView {
       label_text(r.time, d.time);
       label_text(r.dest, d.dest);
       label_text(r.plat, d.plat);
+      // The platform (or a bus's route) is as wide as its text, and the destination takes the
+      // rest of the line: "2" leaves it room that "N155" does not.
+      lv_obj_update_layout(r.plat);
+      int pw = lv_obj_get_width(r.plat);
+      lv_obj_set_width(r.dest, ROW_W - RPAD - TEXT_X - (pw > 0 ? pw + PLAT_GAP : 0));
       // The status string arrives fully composed (delay, coaches, operator, and for an arrivals
       // board the origin's booked and actual departure). `e` is the expected time on rail and
       // the wait on TfL. A time goes under the booked one it revises, in the status's colour; a
@@ -1310,6 +1316,10 @@ class BoardView : public PageView {
   // raised.
   static const int PAD = 16, ROW_X = 16, ROW_W = 448;
   static const int ROW0_Y = 60, ROW0_H = 92, ROW_H = 92, ROW_GAP = 12;
+  // Columns inside a row, measured off ROW_W so the row follows the page's margin: 16 of padding
+  // at either end, an 86 px time, a 12 px gap, and the platform at the far end, at most 96 wide
+  // and 12 px clear of the destination.
+  static const int RPAD = 16, TIME_W = 86, TEXT_X = 114, PLAT_MAX = 96, PLAT_GAP = 12;
 
   static int row_y(int i) {
     return i == 0 ? ROW0_Y : ROW0_Y + ROW0_H + ROW_GAP + (ROW_H + ROW_GAP) * (i - 1);
@@ -1321,9 +1331,8 @@ class BoardView : public PageView {
     lv_obj_t *expected = nullptr;
   };
 
-  // Columns inside a row, measured from the row's own left edge: 16 px of padding, a 72 px time,
-  // a 12 px gap, then the destination over its status, with the platform right-aligned at the
-  // far end. The time and the platform both sit on the destination's line rather than the row's
+  // Columns inside a row: the time, then the destination over its status, with the platform
+  // right-aligned at the far end. The time and the platform both sit on the destination's line rather than the row's
   // middle: the three are read together, and it leaves the status the full width, because the
   // composed status strings are long and the design's own are not. The platform is set as the
   // destination is, size and weight, so the line reads as one.
@@ -1331,36 +1340,34 @@ class BoardView : public PageView {
     int h = row_h(i), y = row_y(i);
     bool first = i == 0;
     // The destination and its status are centred in the row's height.
-    const int dest_h = first ? 30 : 28, status_h = 24;
+    // The first row is Figtree 600/30, the rest 500/28, and every status 500/22: sizes that leave
+    // about 13 px above and below the text in a 92 px card.
+    const int dest_h = first ? 36 : 34, status_h = 28;
+    const lv_font_t *line_font = F(first ? g_fonts.sans600_30 : g_fonts.sans500_28);
     int pad = (h - (dest_h + 2 + status_h)) / 2;
     // Every row is a card: the first raised, the rest on the weather face's resting card colour.
     r.box = mk_panel(root_, ROW_X, y, ROW_W, h, first ? T_RAISED : T_CARD, 16);
-    // The columns are measured off ROW_W rather than written down, so the row follows the page's
-    // margin: 16 of padding at either end, a 72 px time, a 12 px gap, the platform at the far end.
-    const int rpad = 16, time_w = 72, text_x = 100, plat_w = 72, plat_x = ROW_W - rpad - plat_w;
+    const int rpad = RPAD, time_w = TIME_W, text_x = TEXT_X;
     // The time is set as the destination is, so the line reads as one. Figtree's figures are not
-    // all one width, so the column is as wide as the widest time ("00:00" at 600/24) and the
+    // all one width, so the column is as wide as the widest time ("00:00" at 600/30) and the
     // destinations start from the same place whatever the time is.
-    r.time = mk_label(r.box, rpad, pad, time_w, dest_h,
-                      F(first ? g_fonts.sans600_24 : g_fonts.sans500_22),
-                      first ? T_CHALK : T_TIME2);
+    r.time = mk_label(r.box, rpad, pad, time_w, dest_h, line_font, first ? T_CHALK : T_TIME2);
     // The revised time of a late train, under the booked one and on the status's line.
-    r.expected = mk_label(r.box, rpad, pad + dest_h + 2, time_w, status_h, F(g_fonts.sans500_18),
+    r.expected = mk_label(r.box, rpad, pad + dest_h + 2, time_w, status_h, F(g_fonts.sans500_22),
                           T_CHALK70);
     set_hidden(r.expected, true);
-    r.dest = mk_label(r.box, text_x, pad, plat_x - 14 - text_x, dest_h,
-                      F(first ? g_fonts.sans600_24 : g_fonts.sans500_22),
+    r.dest = mk_label(r.box, text_x, pad, ROW_W - rpad - text_x, dest_h, line_font,
                       first ? T_CHALK : T_TITLE2);
     lv_label_set_long_mode(r.dest, LV_LABEL_LONG_MODE_DOTS);
     // The status is set in Figtree rather than mono: at a size worth reading from the hall a
     // monospaced "09:04 . Delayed . 10 coaches . SWR" does not fit the row, and this does.
     r.status = mk_label(r.box, text_x, pad + dest_h + 2, ROW_W - rpad - text_x, status_h,
-                        F(g_fonts.sans500_18), T_CHALK70);
+                        F(g_fonts.sans500_22), T_CHALK70);
     lv_label_set_long_mode(r.status, LV_LABEL_LONG_MODE_DOTS);
-    r.plat = mk_label(r.box, plat_x, pad, plat_w, dest_h,
-                      F(first ? g_fonts.sans600_24 : g_fonts.sans500_22),
-                      first ? T_CHALK : T_CHALK70);
-    lv_obj_set_style_text_align(r.plat, LV_TEXT_ALIGN_RIGHT, 0);
+    r.plat = mk_label(r.box, 0, pad, 0, dest_h, line_font, first ? T_CHALK : T_CHALK70);
+    lv_obj_set_style_max_width(r.plat, PLAT_MAX, 0);
+    lv_label_set_long_mode(r.plat, LV_LABEL_LONG_MODE_CLIP);
+    lv_obj_align(r.plat, LV_ALIGN_TOP_RIGHT, -rpad, pad);
     set_hidden(r.box, true);
   }
 
