@@ -1208,7 +1208,7 @@ class BootView {
 // ---- board: the departures or arrivals template, laid out as BoardFace in the design system.
 //
 // 16 px of padding all round, the strip every face has, then four rows with the design's 22 px
-// gap that fill the face to the bottom margin: rows at 60 (raised, 86 tall), 168, 274 and 380
+// gap that fill the face to the bottom margin, each on its own card: rows at 60 (raised, 86 tall), 168, 274 and 380
 // (84 tall each, ending at 464), with the page dots over the last one while they show. A problem
 // line has no band of its own, so it takes the fourth row's place.
 //
@@ -1332,10 +1332,8 @@ class BoardView : public PageView {
     // The destination and its status are centred in the row's height.
     const int dest_h = first ? 30 : 28, status_h = 24;
     int pad = (h - (dest_h + 2 + status_h)) / 2;
-    r.box = first ? mk_panel(root_, ROW_X, y, ROW_W, h, T_RAISED, 16)
-                  : mk_obj(root_, ROW_X, y, ROW_W, h);
-    // The third and fourth rows carry a hairline along the top, as the design has them.
-    if (i >= 2) mk_rule(r.box, 0, 0, ROW_W, T_LINE);
+    // Every row is a card: the first raised, the rest on the weather face's resting card colour.
+    r.box = mk_panel(root_, ROW_X, y, ROW_W, h, first ? T_RAISED : T_CARD, 16);
     // The columns are measured off ROW_W rather than written down, so the row follows the page's
     // margin: 16 of padding at either end, a 72 px time, a 12 px gap, the platform at the far end.
     const int rpad = 16, time_w = 72, text_x = 100, plat_w = 72, plat_x = ROW_W - rpad - plat_w;
